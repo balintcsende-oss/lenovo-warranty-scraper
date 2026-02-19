@@ -15,13 +15,14 @@ uploaded_file = st.file_uploader(
 )
 if uploaded_file:
     try:
-        df = pd.read_excel(uploaded_file, engine="openpyxl")
+        # header=2 → 3. sor az oszlopnevek
+        df = pd.read_excel(uploaded_file, engine="openpyxl", header=2)
     except Exception as e:
         st.error(f"Hiba a fájl beolvasásakor: {e}")
         st.stop()
 
     if "SKU" not in df.columns:
-        st.error("A fájl nem tartalmaz 'SKU' oszlopot.")
+        st.error("A fájl nem tartalmaz 'SKU' oszlopot a 3. sorban.")
         st.stop()
 
     # 2️⃣ Új oszlopok létrehozása
