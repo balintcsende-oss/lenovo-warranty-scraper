@@ -1,68 +1,61 @@
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
+from io import BytesIO
 
-st.title("Lenovo Warranty Scraper (No Browser Version)")
+st.set_page_config(page_title="Lenovo Warranty Scraper", layout="wide")
 
-uploaded_file = st.file_uploader(
-    "Töltsd fel az Excel fájlt", type=["xlsx", "xlsm"]
-)
+st.title("Lenovo Warranty Scraper")
+st.write("Feltöltött Excel fájl alapján lekéri a Base Warranty és Included Upgrade értékeket.")
 
-if uploaded_file is not None:
-
-    df = pd.read_excel(uploaded_file, engine="openpyxl", header=2)
-
-    if "ProductLink" not in df.columns:
-        st.error("Nem található ProductLink oszlop!")
+# 1️⃣ Excel feltöltés
+uploaded_file = st.file_uploader("Töltsd fel az Excel fájlodat (xls/xlsx)", type=["xls", "xlsx"])
+if uploaded_file:
+    try:
+        df = pd.read_excel(uploaded_file)
+    except Exception as e:
+        st.error(f"Hiba a fájl beolvasásakor: {e}")
         st.stop()
 
+    if "model_code" not in df.columns:
+        st.error("A fájl nem tartalmaz 'model_code' oszlopot.")
+        st.stop()
+
+    # 2️⃣ Új oszlopok létrehozása
     df["Base Warranty"] = ""
     df["Included Upgrade"] = ""
 
-    progress = st.progress(0)
-    total = len(df)
-
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-
-    for index, row in df.iterrows():
-        url = row["ProductLink"]
-
-        if pd.isna(url):
-            continue
-
+    # 3️⃣ SpecData API lekérés
+    st.info("Garanciaadatok lekérése a SpecData API-ból...")
+    progress_text = st.empty()
+    for i, row in df.iterrows():
+        model_code = row["model_code"]
+        api_url = f"https://psref.lenovo.com/api/model/Info/SpecData?model_code={model_code}&show_hyphen=false"
         try:
-            response = requests.get(url, headers=headers, timeout=30)
-            soup = BeautifulSoup(response.text, "html.parser")
+            response = requests.get(api_url, timeout=30)
+            response.raise_for_status()
+            specdata = response.json()
 
-            base_row = soup.find("tr", {"data": "Base Warranty"})
-            upgrade_row = soup.find("tr", {"data": "Included Upgrade"})
-
-            if base_row:
-                base_value = base_row.find("div", class_="rightValue")
-                if base_value:
-                    df.at[index, "Base Warranty"] = base_value.text.strip()
-
-            if upgrade_row:
-                upgrade_value = upgrade_row.find("div", class_="rightValue")
-                if upgrade_value:
-                    df.at[index, "Included Upgrade"] = upgrade_value.text.strip()
-
+            # SERVICE rész kinyerése
+            service = specdata.get("Specifications", {}).get("SERVICE", {})
+            df.at[i, "Base Warranty"] = service.get("Base Warranty", "")
+            df.at[i, "Included Upgrade"] = service.get("Included Upgrade", "")
         except Exception as e:
-            st.warning(f"Hiba ennél a linknél: {url}")
+            df.at[i, "Base Warranty"] = "Hiba"
+            df.at[i, "Included Upgrade"] = "Hiba"
 
-        progress.progress((index + 1) / total)
+        # Frissítjük a progress
+        progress_text.text(f"Feldolgozás: {i+1}/{len(df)}")
 
-    st.success("Feldolgozás kész!")
+    st.success("Garanciaadatok lekérése kész!")
 
-    output_file = "lenovo_warranty_result.xlsx"
-    df.to_excel(output_file, index=False)
-
-    with open(output_file, "rb") as f:
-        st.download_button(
-            "Letöltés",
-            f,
-            file_name="lenovo_warranty_result.xlsx"
-        )
+    # 4️⃣ Excel letöltés lehetősége
+    output = BytesIO()
+    df.to_excel(output, index=False)
+    output.seek(0)
+    st.download_button(
+        label="Mentés Excelként",
+        data=output,
+        file_name="lenovo_warranty_result.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
