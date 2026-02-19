@@ -3,19 +3,23 @@ import pandas as pd
 import asyncio
 import subprocess
 
-# Telepítjük a Chromiumot Playwright-hoz
+# Telepítjük a Chromiumot Playwright-hoz (Streamlit Cloud esetén)
 subprocess.run(["playwright", "install", "chromium"], check=True)
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 st.title("Lenovo Warranty Scraper")
 
-uploaded_file = st.file_uploader("Töltsd fel az Excel fájlt", type="xlsx")
+# .xlsx és .xlsm engedélyezése
+uploaded_file = st.file_uploader(
+    "Töltsd fel az Excel fájlt", type=["xlsx", "xlsm"]
+)
 
 MAX_CONCURRENT = 5  # egyszerre hány lapot nyitunk
 
 if uploaded_file is not None:
-    df = pd.read_excel(uploaded_file, header=2)
+    # Pandas engine='openpyxl' mindkét formátumhoz működik
+    df = pd.read_excel(uploaded_file, engine='openpyxl', header=2)
     df["Base Warranty"] = ""
     df["Included Upgrade"] = ""
     
@@ -74,4 +78,6 @@ if uploaded_file is not None:
     # Letöltés
     output_file = "lenovo_warranty_result.xlsx"
     df.to_excel(output_file, index=False)
-    st.download_button("Letöltés", output_file, file_name="lenovo_warranty_result.xlsx")
+    st.download_button(
+        "Letöltés", output_file, file_name="lenovo_warranty_result.xlsx"
+    )
