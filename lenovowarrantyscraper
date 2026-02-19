@@ -1,0 +1,94 @@
+# ---------------- Telepítés ---------------- #
+!apt-get update
+!apt-get install -y \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libcups2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpangocairo-1.0-0 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libatspi2.0-0
+
+!pip install playwright pandas openpyxl
+!playwright install chromium
+
+# ---------------- Fájl feltöltés ---------------- #
+from google.colab import files
+import pandas as pd
+uploaded = files.upload()
+file_name = list(uploaded.keys())[0]
+
+# ---------------- Excel beolvasás ---------------- #
+df = pd.read_excel(file_name, header=2)  # header=2 mert C3 a fejléc
+df["Base Warranty"] = ""
+df["Included Upgrade"] = ""
+
+print("Oszlopok:", df.columns.tolist())
+print("Feldolgozás indul...")
+
+# ---------------- Gyorsított Playwright async scraping ---------------- #
+import asyncio
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+
+MAX_CONCURRENT = 5  # egyszerre hány lapot nyitunk
+
+async def fetch_warranty(page, index, url):
+    try:
+        await page.goto(url, timeout=60000)
+        await page.wait_for_load_state("networkidle")
+
+        # Base Warranty
+        base_element = await page.query_selector(
+            'tr[data="Base Warranty"] td.alignleft > div.rightValue'
+        )
+        base_warranty = await base_element.inner_text() if base_element else ""
+
+        # Included Upgrade
+        upgrade_element = await page.query_selector(
+            'tr[data="Included Upgrade"] td.alignleft > div.rightValue'
+        )
+        included_upgrade = await upgrade_element.inner_text() if upgrade_element else ""
+
+        df.at[index, "Base Warranty"] = base_warranty.strip()
+        df.at[index, "Included Upgrade"] = included_upgrade.strip()
+
+    except PlaywrightTimeoutError:
+        print(f"Timeout ennél a linknél: {url}")
+    except Exception as e:
+        print(f"Hiba ennél a linknél: {url}, {e}")
+
+async def extract_all_warranty():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+        sem = asyncio.Semaphore(MAX_CONCURRENT)  # max párhuzamos lap
+
+        async def sem_task(index, url):
+            async with sem:
+                page = await browser.new_page()
+                await fetch_warranty(page, index, url)
+                await page.close()
+
+        tasks = []
+        for index, row in df.iterrows():
+            url = row["ProductLink"]
+            if pd.isna(url):
+                continue
+            tasks.append(asyncio.create_task(sem_task(index, url)))
+
+        await asyncio.gather(*tasks)
+        await browser.close()
+
+# ----------- Futtatás ----------- #
+await extract_all_warranty()
+
+# ---------------- Mentés és letöltés ---------------- #
+output_file = "lenovo_warranty_result.xlsx"
+df.to_excel(output_file, index=False)
+print("Kész! Mentve:", output_file)
+files.download(output_file)
