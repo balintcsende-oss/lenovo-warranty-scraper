@@ -6,13 +6,17 @@ from io import BytesIO
 st.set_page_config(page_title="Lenovo Warranty Scraper", layout="wide")
 
 st.title("Lenovo Warranty Scraper")
-st.write("Feltöltött Excel fájl alapján lekéri a Base Warranty és Included Upgrade értékeket.")
+st.write("Feltöltött Excel (.xls, .xlsx, .xlsm) fájl alapján lekéri a Base Warranty és Included Upgrade értékeket.")
 
 # 1️⃣ Excel feltöltés
-uploaded_file = st.file_uploader("Töltsd fel az Excel fájlodat (xls/xlsx)", type=["xls", "xlsx"])
+uploaded_file = st.file_uploader(
+    "Töltsd fel az Excel fájlodat (xls, xlsx, xlsm)", 
+    type=["xls", "xlsx", "xlsm"]
+)
 if uploaded_file:
     try:
-        df = pd.read_excel(uploaded_file)
+        # header=0 feltételezzük, hogy az első sor a fejléc
+        df = pd.read_excel(uploaded_file, engine="openpyxl")
     except Exception as e:
         st.error(f"Hiba a fájl beolvasásakor: {e}")
         st.stop()
@@ -51,7 +55,7 @@ if uploaded_file:
 
     # 4️⃣ Excel letöltés lehetősége
     output = BytesIO()
-    df.to_excel(output, index=False)
+    df.to_excel(output, index=False, engine="openpyxl")
     output.seek(0)
     st.download_button(
         label="Mentés Excelként",
