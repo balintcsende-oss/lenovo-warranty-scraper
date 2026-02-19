@@ -42,6 +42,9 @@ if uploaded_file:
             response.raise_for_status()
             specdata = response.json()
 
+             # ⚡ Debug: mutatjuk a JSON-t Streamlit-ben
+    st.json(specdata)  # <-- ide másold be
+
             # SERVICE rész kinyerése
             service = specdata.get("Specifications", {}).get("SERVICE", {})
             df.at[i, "Base Warranty"] = service.get("Base Warranty", "Nincs adat")
@@ -65,3 +68,4 @@ if uploaded_file:
         file_name="lenovo_warranty_result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
