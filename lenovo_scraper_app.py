@@ -1,8 +1,11 @@
-# mentés pl. lenovo_scraper_app.py néven
-
 import streamlit as st
 import pandas as pd
 import asyncio
+import subprocess
+
+# Telepítjük a Chromiumot Playwright-hoz
+subprocess.run(["playwright", "install", "chromium"], check=True)
+
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 st.title("Lenovo Warranty Scraper")
@@ -72,4 +75,3 @@ if uploaded_file is not None:
     output_file = "lenovo_warranty_result.xlsx"
     df.to_excel(output_file, index=False)
     st.download_button("Letöltés", output_file, file_name="lenovo_warranty_result.xlsx")
-
