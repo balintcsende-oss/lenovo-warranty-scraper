@@ -1,72 +1,79 @@
 import streamlit as st
 import pandas as pd
-from io import BytesIO
 import requests
+from io import BytesIO
 
-st.set_page_config(page_title="Lenovo Warranty Scraper", layout="wide")
+st.title("Lenovo Warranty Cloud Version")
 
-st.title("Lenovo Warranty Scraper")
-st.write("Feltöltött Excel (.xls, .xlsx, .xlsm) fájl alapján lekéri a Base Warranty és Included Upgrade értékeket a PSREF API-ból.")
-
-# 1️⃣ Excel feltöltés
 uploaded_file = st.file_uploader(
-    "Töltsd fel az Excel fájlodat (xls, xlsx, xlsm)", 
+    "Excel feltöltése (xls, xlsx, xlsm)",
     type=["xls", "xlsx", "xlsm"]
 )
 
+def get_warranty_data(sku):
+    url = f"https://psref.lenovo.com/api/model/Info/SpecData?model_code={sku}&show_hyphen=false"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": f"https://psref.lenovo.com/Detail?M={sku}",
+        "Origin": "https://psref.lenovo.com"
+    }
+
+    response = requests.get(url, headers=headers, timeout=30)
+
+    if response.status_code != 200:
+        return "Hiba", "Hiba"
+
+    data = response.json()
+
+    base_warranty = "Nincs adat"
+    included_upgrade = "Nincs adat"
+
+    # SERVICE rész bejárása
+    for item in data:
+        if item.get("title") == "SERVICE":
+            if item.get("name") == "Base Warranty":
+                base_warranty = item.get("content", ["Nincs adat"])[0]
+            if item.get("name") == "Included Upgrade":
+                included_upgrade = item.get("content", ["Nincs adat"])[0]
+
+    return base_warranty, included_upgrade
+
+
 if uploaded_file:
-    try:
-        # header=2 → 3. sor a fejléc
-        df = pd.read_excel(uploaded_file, engine="openpyxl", header=2)
-    except Exception as e:
-        st.error(f"Hiba a fájl beolvasásakor: {e}")
-        st.stop()
+
+    df = pd.read_excel(uploaded_file, engine="openpyxl", header=2)
 
     if "SKU" not in df.columns:
-        st.error("A fájl nem tartalmaz 'SKU' oszlopot a 3. sorban.")
+        st.error("Nincs SKU oszlop a 3. sorban.")
         st.stop()
 
-    # 2️⃣ Új oszlopok létrehozása
     df["Base Warranty"] = ""
     df["Included Upgrade"] = ""
 
-    # 3️⃣ Garanciaadatok lekérése az API-ból
-    st.info("Garanciaadatok lekérése a PSREF SpecData API-ból...")
-    progress_text = st.empty()
+    progress = st.progress(0)
 
     for i, row in df.iterrows():
-        sku = row["SKU"]
-        api_url = f"https://psref.lenovo.com/api/model/Info/SpecData?model_code={sku}&show_hyphen=false"
-        try:
-            response = requests.get(api_url, timeout=30)
-            response.raise_for_status()
-            specdata = response.json()
+        sku = str(row["SKU"]).strip()
 
-             # ⚡ Debug: mutatjuk a JSON-t Streamlit-ben
-            st.json(specdata)  # <-- ide másold be
+        base, included = get_warranty_data(sku)
 
-            # SERVICE rész kinyerése
-            service = specdata.get("Specifications", {}).get("SERVICE", {})
-            df.at[i, "Base Warranty"] = service.get("Base Warranty", "Nincs adat")
-            df.at[i, "Included Upgrade"] = service.get("Included Upgrade", "Nincs adat")
-        except Exception:
-            df.at[i, "Base Warranty"] = "Hiba"
-            df.at[i, "Included Upgrade"] = "Hiba"
+        df.at[i, "Base Warranty"] = base
+        df.at[i, "Included Upgrade"] = included
 
-        # Frissítjük a progress
-        progress_text.text(f"Feldolgozás: {i+1}/{len(df)}")
+        progress.progress((i + 1) / len(df))
 
-    st.success("Garanciaadatok lekérése kész!")
+    st.success("Kész!")
 
-    # 4️⃣ Excel letöltés lehetősége
     output = BytesIO()
     df.to_excel(output, index=False, engine="openpyxl")
     output.seek(0)
+
     st.download_button(
-        label="Mentés Excelként",
+        "Eredmény letöltése",
         data=output,
         file_name="lenovo_warranty_result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
-
