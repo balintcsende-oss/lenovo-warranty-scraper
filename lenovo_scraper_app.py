@@ -15,14 +15,13 @@ uploaded_file = st.file_uploader(
 )
 if uploaded_file:
     try:
-        # header=0 feltételezzük, hogy az első sor a fejléc
         df = pd.read_excel(uploaded_file, engine="openpyxl")
     except Exception as e:
         st.error(f"Hiba a fájl beolvasásakor: {e}")
         st.stop()
 
-    if "model_code" not in df.columns:
-        st.error("A fájl nem tartalmaz 'model_code' oszlopot.")
+    if "SKU" not in df.columns:
+        st.error("A fájl nem tartalmaz 'SKU' oszlopot.")
         st.stop()
 
     # 2️⃣ Új oszlopok létrehozása
@@ -33,8 +32,8 @@ if uploaded_file:
     st.info("Garanciaadatok lekérése a SpecData API-ból...")
     progress_text = st.empty()
     for i, row in df.iterrows():
-        model_code = row["model_code"]
-        api_url = f"https://psref.lenovo.com/api/model/Info/SpecData?model_code={model_code}&show_hyphen=false"
+        sku = row["SKU"]
+        api_url = f"https://psref.lenovo.com/api/model/Info/SpecData?model_code={sku}&show_hyphen=false"
         try:
             response = requests.get(api_url, timeout=30)
             response.raise_for_status()
