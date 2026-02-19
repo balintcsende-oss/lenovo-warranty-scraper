@@ -1,83 +1,68 @@
 import streamlit as st
 import pandas as pd
-import asyncio
-import subprocess
+import requests
+from bs4 import BeautifulSoup
 
-# Telepítjük a Chromiumot Playwright-hoz (Streamlit Cloud esetén)
-subprocess.run(["playwright", "install", "chromium"], check=True)
+st.title("Lenovo Warranty Scraper (No Browser Version)")
 
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-
-st.title("Lenovo Warranty Scraper")
-
-# .xlsx és .xlsm engedélyezése
 uploaded_file = st.file_uploader(
     "Töltsd fel az Excel fájlt", type=["xlsx", "xlsm"]
 )
 
-MAX_CONCURRENT = 5  # egyszerre hány lapot nyitunk
-
 if uploaded_file is not None:
-    # Pandas engine='openpyxl' mindkét formátumhoz működik
-    df = pd.read_excel(uploaded_file, engine='openpyxl', header=2)
+
+    df = pd.read_excel(uploaded_file, engine="openpyxl", header=2)
+
+    if "ProductLink" not in df.columns:
+        st.error("Nem található ProductLink oszlop!")
+        st.stop()
+
     df["Base Warranty"] = ""
     df["Included Upgrade"] = ""
-    
-    st.write("Fájl beolvasva:", df.shape)
 
-    st.write("Feldolgozás indul, kérlek várj...")
+    progress = st.progress(0)
+    total = len(df)
 
-    async def fetch_warranty(page, index, url):
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    for index, row in df.iterrows():
+        url = row["ProductLink"]
+
+        if pd.isna(url):
+            continue
+
         try:
-            await page.goto(url, timeout=60000)
-            await page.wait_for_load_state("networkidle")
+            response = requests.get(url, headers=headers, timeout=30)
+            soup = BeautifulSoup(response.text, "html.parser")
 
-            base_element = await page.query_selector(
-                'tr[data="Base Warranty"] td.alignleft > div.rightValue'
-            )
-            base_warranty = await base_element.inner_text() if base_element else ""
+            base_row = soup.find("tr", {"data": "Base Warranty"})
+            upgrade_row = soup.find("tr", {"data": "Included Upgrade"})
 
-            upgrade_element = await page.query_selector(
-                'tr[data="Included Upgrade"] td.alignleft > div.rightValue'
-            )
-            included_upgrade = await upgrade_element.inner_text() if upgrade_element else ""
+            if base_row:
+                base_value = base_row.find("div", class_="rightValue")
+                if base_value:
+                    df.at[index, "Base Warranty"] = base_value.text.strip()
 
-            df.at[index, "Base Warranty"] = base_warranty.strip()
-            df.at[index, "Included Upgrade"] = included_upgrade.strip()
+            if upgrade_row:
+                upgrade_value = upgrade_row.find("div", class_="rightValue")
+                if upgrade_value:
+                    df.at[index, "Included Upgrade"] = upgrade_value.text.strip()
 
-        except PlaywrightTimeoutError:
-            st.warning(f"Timeout ennél a linknél: {url}")
         except Exception as e:
-            st.warning(f"Hiba ennél a linknél: {url}, {e}")
+            st.warning(f"Hiba ennél a linknél: {url}")
 
-    async def extract_all_warranty():
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
-            sem = asyncio.Semaphore(MAX_CONCURRENT)
-
-            async def sem_task(index, url):
-                async with sem:
-                    page = await browser.new_page()
-                    await fetch_warranty(page, index, url)
-                    await page.close()
-
-            tasks = []
-            for index, row in df.iterrows():
-                url = row["ProductLink"]
-                if pd.isna(url):
-                    continue
-                tasks.append(asyncio.create_task(sem_task(index, url)))
-
-            await asyncio.gather(*tasks)
-            await browser.close()
-
-    asyncio.run(extract_all_warranty())
+        progress.progress((index + 1) / total)
 
     st.success("Feldolgozás kész!")
 
-    # Letöltés
     output_file = "lenovo_warranty_result.xlsx"
     df.to_excel(output_file, index=False)
-    st.download_button(
-        "Letöltés", output_file, file_name="lenovo_warranty_result.xlsx"
-    )
+
+    with open(output_file, "rb") as f:
+        st.download_button(
+            "Letöltés",
+            f,
+            file_name="lenovo_warranty_result.xlsx"
+        )
