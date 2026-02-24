@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 from io import BytesIO
+from openpyxl import load_workbook
 
 st.title("HP OID lekérő + link generátor")
 
@@ -14,7 +15,6 @@ if uploaded_file:
 
     df = pd.read_excel(uploaded_file)
 
-    # Új oszlopok létrehozása
     df["OID"] = ""
     df["LINK"] = ""
     df["OPEN PRODUCT LINK"] = ""
@@ -55,9 +55,7 @@ if uploaded_file:
 
                     df.at[i, "OID"] = oid
                     df.at[i, "LINK"] = product_link
-                    df.at[i, "OPEN PRODUCT LINK"] = f'=HYPERLINK("{product_link}", "OPEN")'
                     df.at[i, "IMAGE LINK"] = image_link
-                    df.at[i, "OPEN IMAGE LINK"] = f'=HYPERLINK("{image_link}", "OPEN")'
                 else:
                     df.at[i, "OID"] = "Nincs találat"
             else:
@@ -71,31 +69,36 @@ if uploaded_file:
     st.success("Feldolgozás kész!")
     st.dataframe(df)
 
-    # ===== Excel export =====
+    # ===== Excel mentés openpyxl-lel =====
     output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False, sheet_name="Sheet1")
-        workbook = writer.book
-        worksheet = writer.sheets["Sheet1"]
-
-        # Hiperlink oszlopok újraírása, hogy valódi Excel linkek legyenek
-        for row_num in range(1, len(df) + 1):
-            if df.loc[row_num - 1, "LINK"]:
-                worksheet.write_formula(
-                    row_num, 3,
-                    df.loc[row_num - 1, "OPEN PRODUCT LINK"]
-                )
-            if df.loc[row_num - 1, "IMAGE LINK"]:
-                worksheet.write_formula(
-                    row_num, 5,
-                    df.loc[row_num - 1, "OPEN IMAGE LINK"]
-                )
-
+    df.to_excel(output, index=False)
     output.seek(0)
+
+    wb = load_workbook(output)
+    ws = wb.active
+
+    # Hyperlinkek beállítása
+    for row in range(2, len(df) + 2):
+        product_link = ws[f"C{row}"].value
+        image_link = ws[f"E{row}"].value
+
+        if product_link:
+            ws[f"D{row}"].value = "OPEN"
+            ws[f"D{row}"].hyperlink = product_link
+            ws[f"D{row}"].style = "Hyperlink"
+
+        if image_link:
+            ws[f"F{row}"].value = "OPEN"
+            ws[f"F{row}"].hyperlink = image_link
+            ws[f"F{row}"].style = "Hyperlink"
+
+    final_output = BytesIO()
+    wb.save(final_output)
+    final_output.seek(0)
 
     st.download_button(
         label="Excel letöltése",
-        data=output,
+        data=final_output,
         file_name="output_with_links.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
