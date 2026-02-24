@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 import io
 
-st.title("VPN Product Link + Brand-Specific Gallery Images")
+st.title("VPN Product Link + High-Res Gallery Images")
 
 uploaded_file = st.file_uploader("Töltsd fel az Excel fájlt", type=["xlsx"])
 
@@ -24,7 +24,7 @@ if uploaded_file:
                 return f"https://www.philips.hu/c-p/{vpn.replace('/', '_')}/"
             elif brand == "AOC":
                 return f"https://www.aoc.com/hu/gaming/monitors/{vpn.lower()}"
-            elif brand == "Viewsonic":
+            elif brand == "ViewSonic":
                 return f"https://www.viewsonic.com/hu/products/lcd/{vpn}"
             else:
                 return ""
@@ -38,27 +38,28 @@ if uploaded_file:
                 soup = BeautifulSoup(resp.text, "html.parser")
                 images = []
 
-                if brand == "Viewsonic":
+                if brand == "ViewSonic":
                     container = soup.select_one("div#overviewGallery")
                     if container:
                         for img in container.find_all("img"):
+                            # Legnagyobb elérhető kép
+                            full = img.get("data-full") or img.get("src")
+                            if full and full.startswith("http"):
+                                images.append(full)
+
+                elif brand == "Philips":
+                    # minden galéria kép
+                    gallery_imgs = soup.find_all("img", class_="p-picture p-normal-view p-is-zoomable p-lazy-handled")
+                    for img in gallery_imgs:
+                        if img.has_attr("srcset"):
+                            srcset = img["srcset"].split(",")
+                            # a legnagyobb felbontású kép a lista végén
+                            max_img = srcset[-1].strip().split(" ")[0]
+                            images.append(max_img)
+                        else:
                             src = img.get("src")
                             if src and src.startswith("http"):
                                 images.append(src)
-
-                elif brand == "Philips":
-                    container = soup.select_one("div.p-image-gallery.p-secondary")
-                    if container:
-                        for img in container.find_all("img"):
-                            # srcset esetén a legnagyobb kép
-                            if img.has_attr("srcset"):
-                                srcset = img["srcset"].split(",")
-                                max_img = srcset[-1].strip().split(" ")[0]
-                                images.append(max_img)
-                            else:
-                                src = img.get("src")
-                                if src and src.startswith("http"):
-                                    images.append(src)
 
                 elif brand == "AOC":
                     container = soup.select_one("div.image-carousel")
