@@ -73,38 +73,36 @@ if uploaded_file:
     # -------------------------------------------------
     # Philips
     # -------------------------------------------------
+    import re
+
     def get_philips_gallery(url):
         images = []
         try:
             response = requests.get(url, headers=headers, timeout=10)
-            soup = BeautifulSoup(response.text, "html.parser")
+            html = response.text
 
-            gallery = soup.select_one("div.p-image-gallery.p-secondary")
-            if gallery:
-                for img in gallery.find_all("img"):
-                    if img.has_attr("srcset"):
-                        srcset = img["srcset"].split(",")
-                        largest = srcset[-1].strip().split(" ")[0]
-                        images.append(largest)
-                    else:
-                        src = img.get("src")
-                        if src and src.startswith("http"):
-                            images.append(src)
+            # Minden philipsconsumer asset ID kinyerése
+            pattern = r"philipsconsumer/([a-zA-Z0-9]+)"
+            matches = re.findall(pattern, html)
 
-            if len(images) <= 1:
-                for script in soup.find_all("script"):
-                    if not script.string:
-                        continue
-                    text = script.string
-                    if "jpg" in text.lower() or "png" in text.lower():
-                        parts = text.split('"')
-                        for part in parts:
-                            if part.startswith("http") and any(ext in part.lower() for ext in [".jpg",".jpeg",".png"]):
-                                if not any(x in part.lower() for x in ["logo","icon","sprite","thumb"]):
-                                    images.append(part)
+            unique_ids = list(dict.fromkeys(matches))
+
+            for asset_id in unique_ids:
+                # kizárjuk a logókat és ikonokat
+                if any(x in asset_id.lower() for x in ["logo", "icon", "banner"]):
+                    continue
+
+                large_url = (
+                    f"https://images.philips.com/is/image/philipsconsumer/"
+                    f"{asset_id}?$pnglarge$&wid=1250"
+                )
+
+                images.append(large_url)
 
         except:
             return []
+
+    return images
 
         return list(dict.fromkeys(images))
 
