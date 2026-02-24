@@ -4,7 +4,7 @@ import requests
 from io import BytesIO
 from openpyxl import load_workbook
 
-st.title("HP OID lekérő + link generátor + 300 DPI képek")
+st.title("HP OID lekérő + link generátor + 300 DPI PNG képek")
 
 uploaded_file = st.file_uploader(
     "Töltsd fel az Excel fájlt (A oszlopban a cikkszámok)",
@@ -60,7 +60,7 @@ if uploaded_file:
                     df.at[i, "LINK"] = product_link
                     df.at[i, "IMAGE LINK"] = image_link
 
-                    # ===== 300 DPI képek lekérése =====
+                    # ===== 300 DPI PNG PRODUCT IMAGE képek lekérése =====
                     try:
                         img_response = requests.get(
                             image_api_template.format(oid),
@@ -74,15 +74,20 @@ if uploaded_file:
                             pic_index = 1
 
                             for item in img_data.get("contents", []):
+
                                 dpi = item.get("dpiResolution")
+                                doc_type = item.get("documentTypeDetail")
+                                image_url = item.get("imageUrlHttps")
 
-                                if str(dpi).startswith("300"):
-                                    image_url = item.get("imageUrlHttps")
-
-                                    if image_url:
-                                        col_name = f"PIC LINK {pic_index}"
-                                        df.at[i, col_name] = image_url
-                                        pic_index += 1
+                                if (
+                                    str(dpi).startswith("300")
+                                    and doc_type == "product image"
+                                    and image_url
+                                    and image_url.lower().endswith(".png")
+                                ):
+                                    col_name = f"PIC LINK {pic_index}"
+                                    df.at[i, col_name] = image_url
+                                    pic_index += 1
 
                     except:
                         pass
@@ -109,7 +114,7 @@ if uploaded_file:
     wb = load_workbook(output)
     ws = wb.active
 
-    # ===== Hyperlinkek beállítása (nem módosítva a működő rész) =====
+    # ===== Hyperlinkek (nem módosítva) =====
     for row in range(2, len(df) + 2):
         product_link = ws[f"C{row}"].value
         image_link = ws[f"E{row}"].value
@@ -131,6 +136,6 @@ if uploaded_file:
     st.download_button(
         label="Excel letöltése",
         data=final_output,
-        file_name="output_with_links_and_images.xlsx",
+        file_name="output_with_filtered_png_images.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
