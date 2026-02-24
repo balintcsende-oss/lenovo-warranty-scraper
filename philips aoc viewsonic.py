@@ -1,15 +1,12 @@
 import streamlit as st
 import pandas as pd
 import io
-import time
+import asyncio
 
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager
+from playwright.async_api import async_playwright
 
-st.title("VPN Product Link + High-Res Gallery Images")
+st.title("VPN Product Link + High-Res Gallery Images (Playwright)")
 
 uploaded_file = st.file_uploader("Töltsd fel az Excel fájlt", type=["xlsx"])
 
@@ -28,9 +25,9 @@ if uploaded_file:
         vpn = str(vpn)
         brand = str(brand).strip()
 
-        if brand == "Philips":
+        if brand.lower() == "philips":
             return f"https://www.philips.hu/c-p/{vpn.replace('/', '_')}/"
-        elif brand == "AOC":
+        elif brand.lower() == "aoc":
             return f"https://www.aoc.com/hu/gaming/monitors/{vpn.lower()}"
         elif brand.lower() == "viewsonic":
             return f"https://www.viewsonic.com/hu/products/lcd/{vpn}"
@@ -39,38 +36,23 @@ if uploaded_file:
     df["Product link"] = df.apply(lambda r: generate_link(r["VPN"], r["Brand"]), axis=1)
 
     # -------------------------
-    # Selenium driver setup
+    # Playwright galéria lekérés
     # -------------------------
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
-
-    driver = webdriver.Chrome(
-        ChromeDriverManager().install(),
-        options=chrome_options
-    )
-
-    # -------------------------
-    # Galéria képek kigyűjtése márkánként
-    # -------------------------
-    def get_gallery_images(url, brand):
+    async def get_gallery_images(playwright, url, brand):
         images = []
         try:
-            driver.get(url)
-            time.sleep(3)  # vár a JS betöltésre
+            browser = await playwright.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.goto(url)
+            await page.wait_for_timeout(3000)  # JS renderre várunk
 
-            html = driver.page_source
+            html = await page.content()
             soup = BeautifulSoup(html, "html.parser")
 
-            # -------- ViewSonic --------
             if brand.lower().startswith("view"):
                 container = soup.select_one("div#overviewGallery")
                 if container:
                     for img in container.find_all("img"):
-                        # srcset vagy src
                         if img.has_attr("srcset"):
                             srcset = img["srcset"].split(",")
                             largest = srcset[-1].strip().split(" ")[0]
@@ -80,7 +62,6 @@ if uploaded_file:
                             if src and src.startswith("http"):
                                 images.append(src)
 
-            # -------- Philips --------
             elif brand.lower() == "philips":
                 gallery_imgs = soup.find_all(
                     "img",
@@ -96,7 +77,6 @@ if uploaded_file:
                         if src and src.startswith("http"):
                             images.append(src)
 
-            # -------- AOC --------
             elif brand.lower() == "aoc":
                 container = soup.select_one("div.image-carousel")
                 if container:
@@ -105,22 +85,31 @@ if uploaded_file:
                         if src and src.startswith("http"):
                             images.append(src)
 
-            # duplikátumok eltávolítása
-            images = list(dict.fromkeys(images))
+            images = list(dict.fromkeys(images))  # duplikátumok
+            await browser.close()
 
         except Exception as e:
-            st.warning(f"Hiba történt: {url}")
+            st.warning(f"Hiba történt: {url} ({str(e)})")
+
         return images
 
-    st.info("Oldalak betöltése és galéria képek kigyűjtése, ez eltarthat néhány másodpercig...")
-
-    all_images = []
-    for idx, row in df.iterrows():
-        imgs = get_gallery_images(row["Product link"], row["Brand"])
-        all_images.append(imgs)
+    st.info("Oldalak betöltése és galéria képek kigyűjtése, ez eltarthat pár másodpercig...")
 
     # -------------------------
-    # Pick link oszlopok létrehozása
+    # Async lekérés minden product linkhez
+    # -------------------------
+    async def process_all():
+        all_images = []
+        async with async_playwright() as p:
+            for idx, row in df.iterrows():
+                imgs = await get_gallery_images(p, row["Product link"], row["Brand"])
+                all_images.append(imgs)
+        return all_images
+
+    all_images = asyncio.run(process_all())
+
+    # -------------------------
+    # Pick link oszlopok
     # -------------------------
     max_imgs = max(len(imgs) for imgs in all_images) if all_images else 0
     for i in range(max_imgs):
@@ -143,8 +132,3 @@ if uploaded_file:
         file_name="product_links_with_gallery.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
-    # -------------------------
-    # Driver lezárása
-    # -------------------------
-    driver.quit()
