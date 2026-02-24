@@ -36,7 +36,7 @@ if uploaded_file:
     # -------------------------------------------------
     def get_viewsonic_gallery(url):
 
-    images = []
+        images = []
 
     try:
         headers = {
