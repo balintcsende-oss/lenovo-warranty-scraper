@@ -9,7 +9,7 @@ uploaded_file = st.file_uploader("Töltsd fel az Excel fájlt", type=["xlsx"])
 if uploaded_file is not None:
     df = pd.read_excel(uploaded_file)
 
-    # Ellenőrizzük, hogy léteznek-e a szükséges oszlopok
+    # Ellenőrizzük a szükséges oszlopokat
     required_columns = ["VPN", "Brand"]
     if not all(col in df.columns for col in required_columns):
         st.error("Az Excel fájlnak tartalmaznia kell a 'VPN' és 'Brand' oszlopokat!")
@@ -39,21 +39,18 @@ if uploaded_file is not None:
         # Product link oszlop létrehozása
         df["Product link"] = df.apply(lambda row: generate_link(row["VPN"], row["Brand"]), axis=1)
 
-        # Ha létezik legalább 3 sor, a harmadik sorba tesszük az értéket
-        if len(df) >= 3:
-            df.loc[2, "Product link"] = df.loc[2, "Product link"]
-
         st.subheader("Eredmény")
         st.dataframe(df)
 
-        # Letöltési lehetőség
+        # Excel mentés openpyxl-lel
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False)
+        output.seek(0)
 
         st.download_button(
             label="Eredmény letöltése Excel formátumban",
-            data=output.getvalue(),
+            data=output,
             file_name="generated_links.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
