@@ -11,20 +11,16 @@ uploaded_file = st.file_uploader("Töltsd fel az Excel fájlt", type=["xlsx"])
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
 
-    required_columns = ["VPN", "Brand"]
-    if not all(col in df.columns for col in required_columns):
+    if not all(col in df.columns for col in ["VPN", "Brand"]):
         st.error("Az Excel fájlnak tartalmaznia kell a 'VPN' és 'Brand' oszlopokat!")
         st.stop()
 
     # -------------------------------------------------
-    # Product link generálás (csak ViewSonic)
+    # Product link generálás
     # -------------------------------------------------
     def generate_link(vpn, brand):
-        vpn = str(vpn).strip()
-        brand = str(brand).strip().lower()
-
-        if brand == "viewsonic":
-            return f"https://www.viewsonic.com/hu/products/lcd/{vpn}"
+        if str(brand).strip().lower() == "viewsonic":
+            return f"https://www.viewsonic.com/hu/products/lcd/{str(vpn).strip()}"
         return ""
 
     df["Product link"] = df.apply(
@@ -32,68 +28,68 @@ if uploaded_file:
     )
 
     # -------------------------------------------------
-    # ViewSonic galéria képek lekérése
+    # ViewSonic galéria lekérés (JS nélküli JSON fallback)
     # -------------------------------------------------
     def get_viewsonic_gallery(url):
 
         images = []
 
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0"
+            }
 
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code != 200:
+                return []
+
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # 1️⃣ Normál HTML galéria
+            container = soup.select_one("div#overviewGallery")
+            if container:
+                for img in container.find_all("img"):
+                    if img.has_attr("srcset"):
+                        srcset = img["srcset"].split(",")
+                        largest = srcset[-1].strip().split(" ")[0]
+                        images.append(largest)
+
+            # 2️⃣ Ha csak 1 kép → scriptből próbáljuk
+            if len(images) <= 1:
+
+                scripts = soup.find_all("script")
+
+                for script in scripts:
+                    if script.string:
+                        text = script.string
+
+                        if "jpg" in text or "png" in text:
+                            parts = text.split('"')
+                            for part in parts:
+                                if part.startswith("http") and any(
+                                    ext in part.lower()
+                                    for ext in [".jpg", ".jpeg", ".png"]
+                                ):
+                                    if not any(
+                                        x in part.lower()
+                                        for x in ["logo", "icon", "sprite", "thumb"]
+                                    ):
+                                        images.append(part)
+
+            # duplikátum eltávolítás
+            images = list(dict.fromkeys(images))
+
+        except Exception:
             return []
-
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        # 🔎 1️⃣ próbáljuk a HTML galériát
-        container = soup.select_one("div#overviewGallery")
-        if container:
-            for img in container.find_all("img"):
-                if img.has_attr("srcset"):
-                    srcset = img["srcset"].split(",")
-                    largest = srcset[-1].strip().split(" ")[0]
-                    images.append(largest)
-
-        # 🔎 2️⃣ ha csak 1 kép van → keresünk script-ben
-        if len(images) <= 1:
-
-            scripts = soup.find_all("script")
-
-            for script in scripts:
-                if script.string:
-                    text = script.string
-
-                    if "jpg" in text or "png" in text:
-                        parts = text.split('"')
-                        for part in parts:
-                            if part.startswith("http") and any(ext in part.lower() for ext in [".jpg", ".jpeg", ".png"]):
-
-                                # kiszűrjük az ikonokat/logókat
-                                if not any(x in part.lower() for x in ["logo", "icon", "thumb", "sprite"]):
-                                    images.append(part)
-
-        # duplikátum törlés
-        images = list(dict.fromkeys(images))
 
         return images
 
-    except:
-        return []
-
-
     st.info("ViewSonic galéria képek lekérése...")
 
-    # -------------------------------------------------
-    # Minden ViewSonic sor feldolgozása
-    # -------------------------------------------------
     all_images = []
 
-    for idx, row in df.iterrows():
-        if row["Brand"].strip().lower() == "viewsonic":
+    for _, row in df.iterrows():
+        if str(row["Brand"]).strip().lower() == "viewsonic":
             imgs = get_viewsonic_gallery(row["Product link"])
         else:
             imgs = []
@@ -101,7 +97,7 @@ if uploaded_file:
         all_images.append(imgs)
 
     # -------------------------------------------------
-    # Pick link oszlopok létrehozása
+    # Pick link oszlopok
     # -------------------------------------------------
     max_imgs = max(len(imgs) for imgs in all_images) if all_images else 0
 
@@ -115,7 +111,7 @@ if uploaded_file:
     st.dataframe(df)
 
     # -------------------------------------------------
-    # Excel mentés
+    # Excel export
     # -------------------------------------------------
     output = io.BytesIO()
 
