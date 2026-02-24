@@ -1,10 +1,16 @@
 import streamlit as st
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
 import io
+import time
 
-st.title("VPN Product Link + High-Res Gallery Images")
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
+
+
+st.title("VPN Product Link + High-Res Gallery Images (JS supported)")
 
 uploaded_file = st.file_uploader("Töltsd fel az Excel fájlt", type=["xlsx"])
 
@@ -14,90 +20,149 @@ if uploaded_file:
     required_columns = ["VPN", "Brand"]
     if not all(col in df.columns for col in required_columns):
         st.error("Az Excel fájlnak tartalmaznia kell a 'VPN' és 'Brand' oszlopokat!")
-    else:
+        st.stop()
 
-        # Product link generáló
-        def generate_link(vpn, brand):
-            vpn = str(vpn)
-            brand = str(brand).strip()
-            if brand == "Philips":
-                return f"https://www.philips.hu/c-p/{vpn.replace('/', '_')}/"
-            elif brand == "AOC":
-                return f"https://www.aoc.com/hu/gaming/monitors/{vpn.lower()}"
-            elif brand == "ViewSonic":
-                return f"https://www.viewsonic.com/hu/products/lcd/{vpn}"
-            else:
-                return ""
+    # -------------------------
+    # Product link generálás
+    # -------------------------
 
-        df["Product link"] = df.apply(lambda r: generate_link(r["VPN"], r["Brand"]), axis=1)
+    def generate_link(vpn, brand):
+        vpn = str(vpn)
+        brand = str(brand).strip()
 
-        # Brand-specifikus galéria kép kigyűjtés
-        def get_gallery_images(url, brand):
-            try:
-                resp = requests.get(url, timeout=5)
-                soup = BeautifulSoup(resp.text, "html.parser")
-                images = []
+        if brand == "Philips":
+            return f"https://www.philips.hu/c-p/{vpn.replace('/', '_')}/"
 
-                if brand == "ViewSonic":
-                    container = soup.select_one("div#overviewGallery")
-                    if container:
-                        for img in container.find_all("img"):
-                            # Legnagyobb elérhető kép
-                            full = img.get("data-full") or img.get("src")
-                            if full and full.startswith("http"):
-                                images.append(full)
+        elif brand == "AOC":
+            return f"https://www.aoc.com/hu/gaming/monitors/{vpn.lower()}"
 
-                elif brand == "Philips":
-                    # minden galéria kép
-                    gallery_imgs = soup.find_all("img", class_="p-picture p-normal-view p-is-zoomable p-lazy-handled")
-                    for img in gallery_imgs:
+        elif brand in ["Viewsonic", "ViewSonic"]:
+            return f"https://www.viewsonic.com/hu/products/lcd/{vpn}"
+
+        return ""
+
+    df["Product link"] = df.apply(
+        lambda r: generate_link(r["VPN"], r["Brand"]), axis=1
+    )
+
+    # -------------------------
+    # Selenium driver setup
+    # -------------------------
+
+    @st.cache_resource
+    def get_driver():
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+
+        driver = webdriver.Chrome(
+            ChromeDriverManager().install(),
+            options=chrome_options
+        )
+        return driver
+
+    driver = get_driver()
+
+    # -------------------------
+    # Galéria képek kigyűjtése
+    # -------------------------
+
+    def get_gallery_images(url, brand):
+
+        images = []
+
+        try:
+            driver.get(url)
+            time.sleep(3)  # várunk a JS betöltésre
+
+            html = driver.page_source
+            soup = BeautifulSoup(html, "html.parser")
+
+            # -------- ViewSonic --------
+            if brand.lower().startswith("view"):
+                container = soup.select_one("div#overviewGallery")
+                if container:
+                    for img in container.find_all("img"):
                         if img.has_attr("srcset"):
                             srcset = img["srcset"].split(",")
-                            # a legnagyobb felbontású kép a lista végén
-                            max_img = srcset[-1].strip().split(" ")[0]
-                            images.append(max_img)
+                            largest = srcset[-1].strip().split(" ")[0]
+                            images.append(largest)
                         else:
                             src = img.get("src")
                             if src and src.startswith("http"):
                                 images.append(src)
 
-                elif brand == "AOC":
-                    container = soup.select_one("div.image-carousel")
-                    if container:
-                        for img in container.find_all("img"):
-                            src = img.get("data-zoom-image") or img.get("src")
-                            if src and src.startswith("http"):
-                                images.append(src)
+            # -------- Philips --------
+            elif brand == "Philips":
+                gallery_imgs = soup.find_all(
+                    "img",
+                    class_="p-picture p-normal-view p-is-zoomable p-lazy-handled"
+                )
 
-                return images
-            except:
-                return []
+                for img in gallery_imgs:
+                    if img.has_attr("srcset"):
+                        srcset = img["srcset"].split(",")
+                        largest = srcset[-1].strip().split(" ")[0]
+                        images.append(largest)
+                    else:
+                        src = img.get("src")
+                        if src and src.startswith("http"):
+                            images.append(src)
 
-        st.info("A galéria képek lekérése eltarthat néhány másodpercig minden oldalon...")
+            # -------- AOC --------
+            elif brand == "AOC":
+                container = soup.select_one("div.image-carousel")
+                if container:
+                    for img in container.find_all("img"):
+                        src = img.get("data-zoom-image") or img.get("src")
+                        if src and src.startswith("http"):
+                            images.append(src)
 
-        # Képek kigyűjtése minden product linkhez
-        all_images = []
-        for idx, row in df.iterrows():
-            images = get_gallery_images(row["Product link"], row["Brand"])
-            all_images.append(images)
+            # duplikátumok kiszedése
+            images = list(dict.fromkeys(images))
 
-        # Pick link oszlopok létrehozása dinamikusan
-        max_imgs = max(len(imgs) for imgs in all_images) if all_images else 0
-        for i in range(max_imgs):
-            df[f"Pick link {i+1}"] = [imgs[i] if i < len(imgs) else "" for imgs in all_images]
+        except Exception as e:
+            st.warning(f"Hiba történt: {url}")
 
-        st.subheader("Eredmény")
-        st.dataframe(df)
+        return images
 
-        # Excel mentése openpyxl-lel
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False)
-        output.seek(0)
+    st.info("Oldalak betöltése és galéria képek kigyűjtése...")
 
-        st.download_button(
-            label="Letöltés Excel fájl",
-            data=output.getvalue(),
-            file_name="product_links_with_gallery.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    all_images = []
+
+    for idx, row in df.iterrows():
+        imgs = get_gallery_images(row["Product link"], row["Brand"])
+        all_images.append(imgs)
+
+    # -------------------------
+    # Pick link oszlopok
+    # -------------------------
+
+    max_imgs = max(len(imgs) for imgs in all_images) if all_images else 0
+
+    for i in range(max_imgs):
+        df[f"Pick link {i+1}"] = [
+            imgs[i] if i < len(imgs) else ""
+            for imgs in all_images
+        ]
+
+    st.subheader("Eredmény")
+    st.dataframe(df)
+
+    # -------------------------
+    # Excel mentés
+    # -------------------------
+
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False)
+
+    output.seek(0)
+
+    st.download_button(
+        label="Letöltés Excel fájl",
+        data=output.getvalue(),
+        file_name="product_links_with_gallery.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
