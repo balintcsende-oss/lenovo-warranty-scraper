@@ -2,22 +2,21 @@ import streamlit as st
 import pandas as pd
 import requests
 from io import BytesIO
-from openpyxl import load_workbook
 
-st.title("HP OID + Image Link Generator (300 DPI)")
+st.title("HP OID + Image Link Generator")
 
-uploaded_file = st.file_uploader(
-    "Töltsd fel az Excel fájlt (A oszlopban a cikkszámok)",
-    type=["xlsx"]
-)
+uploaded_file = st.file_uploader("Excel feltöltése", type=["xlsx"])
 
 if uploaded_file:
 
     df = pd.read_excel(uploaded_file)
 
+    # Fix oszlopok létrehozása
     df["OID"] = ""
     df["LINK"] = ""
+    df["OPEN PRODUCT LINK"] = ""
     df["IMAGE LINK"] = ""
+    df["OPEN IMAGE LINK"] = ""
 
     base_api = "https://pcb.inc.hp.com/api/catalogs/hu-hu/nodes/search/autocomplete"
     image_api_template = "https://pcb.inc.hp.com/api/catalogs/hu-hu/nodes/{}/contents/I?status[]=L&status[]=O"
@@ -27,86 +26,97 @@ if uploaded_file:
 
     headers = {"User-Agent": "Mozilla/5.0"}
 
-    all_image_columns = set()
     progress = st.progress(0)
     total_rows = len(df)
 
-    for i, row in df.iterrows():
-        prodnum = row[0]
+    max_pic_count = 0
+
+    for i in range(len(df)):
+
+        prodnum = df.iloc[i, 0]
 
         if pd.isna(prodnum):
             continue
 
-        params = {
-            "query": prodnum,
-            "status[]": ["L", "O"],
-            "exactSearch": "false"
-        }
-
         try:
-            r = requests.get(base_api, params=params, headers=headers, timeout=10)
+            r = requests.get(
+                base_api,
+                params={
+                    "query": prodnum,
+                    "status[]": ["L", "O"],
+                    "exactSearch": "false"
+                },
+                headers=headers,
+                timeout=10
+            )
 
             if r.status_code == 200:
                 data = r.json()
 
                 if data.get("results"):
+
                     oid = data["results"][0]["oid"]
-                    df.at[i, "OID"] = oid
 
                     product_link = product_link_template.format(oid)
                     image_page_link = image_page_link_template.format(oid)
 
+                    df.at[i, "OID"] = oid
                     df.at[i, "LINK"] = product_link
+                    df.at[i, "OPEN PRODUCT LINK"] = product_link
                     df.at[i, "IMAGE LINK"] = image_page_link
+                    df.at[i, "OPEN IMAGE LINK"] = image_page_link
 
-                    # ===== 300 DPI képek lekérése =====
-                    image_api = image_api_template.format(oid)
-                    img_r = requests.get(image_api, headers=headers, timeout=10)
+                    # ===== 300 DPI képek =====
+                    img_r = requests.get(
+                        image_api_template.format(oid),
+                        headers=headers,
+                        timeout=10
+                    )
 
                     if img_r.status_code == 200:
                         img_data = img_r.json()
 
-                        pic_counter = 1
+                        pic_links = []
 
                         for item in img_data.get("results", []):
-                            if item.get("dpiResolution") == "300":
-                                image_url = item.get("imageUrlHttps")
 
-                                col_name = f"PIC LINK {pic_counter}"
-                                df.at[i, col_name] = image_url
-                                all_image_columns.add(col_name)
+                            dpi = item.get("dpiResolution")
 
-                                pic_counter += 1
+                            # Kezeljük int vagy string formátumot
+                            if str(dpi).startswith("300"):
+                                url = item.get("imageUrlHttps")
+                                if url:
+                                    pic_links.append(url)
 
-                else:
-                    df.at[i, "OID"] = "Nincs találat"
+                        # PIC oszlopok létrehozása
+                        for idx, link in enumerate(pic_links, start=1):
+                            col_name = f"PIC LINK {idx}"
+                            df.at[i, col_name] = link
 
-            else:
-                df.at[i, "OID"] = f"API hiba {r.status_code}"
+                        max_pic_count = max(max_pic_count, len(pic_links))
 
-        except Exception:
+        except Exception as e:
             df.at[i, "OID"] = "Hiba"
 
         progress.progress((i + 1) / total_rows)
 
-    # Oszlopok rendezése
-    base_columns = ["OID", "LINK", "IMAGE LINK"]
-    pic_columns = sorted(all_image_columns, key=lambda x: int(x.split()[-1]))
-    final_columns = list(df.columns[:1]) + base_columns + pic_columns
+    # Hiányzó PIC oszlopok pótlása
+    for n in range(1, max_pic_count + 1):
+        col = f"PIC LINK {n}"
+        if col not in df.columns:
+            df[col] = ""
 
-    df = df.reindex(columns=final_columns)
-
-    st.success("Feldolgozás kész!")
+    st.success("Kész!")
     st.dataframe(df)
 
-    # ===== Excel mentés =====
+    # ===== Excel mentés hyperlinkkel =====
     output = BytesIO()
     df.to_excel(output, index=False)
     output.seek(0)
 
     st.download_button(
-        label="Excel letöltése",
-        data=output,
-        file_name="output_with_images.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "Excel letöltése",
+        output,
+        "output.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
