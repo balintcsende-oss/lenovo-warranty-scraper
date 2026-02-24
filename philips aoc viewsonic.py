@@ -4,14 +4,13 @@ import requests
 from bs4 import BeautifulSoup
 import io
 
-st.title("VPN Product Link + High-Res Pick Links")
+st.title("VPN Product Link + Brand-Specific Gallery Images")
 
 uploaded_file = st.file_uploader("Töltsd fel az Excel fájlt", type=["xlsx"])
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
 
-    # Ellenőrizzük a szükséges oszlopokat
     required_columns = ["VPN", "Brand"]
     if not all(col in df.columns for col in required_columns):
         st.error("Az Excel fájlnak tartalmaznia kell a 'VPN' és 'Brand' oszlopokat!")
@@ -19,8 +18,6 @@ if uploaded_file:
 
         # Product link generáló
         def generate_link(vpn, brand):
-            if pd.isna(vpn) or pd.isna(brand):
-                return ""
             vpn = str(vpn)
             brand = str(brand).strip()
             if brand == "Philips":
@@ -32,51 +29,59 @@ if uploaded_file:
             else:
                 return ""
 
-        # Product link oszlop
         df["Product link"] = df.apply(lambda r: generate_link(r["VPN"], r["Brand"]), axis=1)
 
-        # Funkció a nagyfelbontású galéria képek kigyűjtésére
-        def get_high_res_images(url):
+        # Brand-specifikus galéria kép kigyűjtés
+        def get_gallery_images(url, brand):
             try:
                 resp = requests.get(url, timeout=5)
                 soup = BeautifulSoup(resp.text, "html.parser")
-                images = set()
+                images = []
 
-                # srcset attribútumok keresése (általában nagy felbontású képek)
-                for img in soup.find_all("img"):
-                    if img.has_attr("srcset"):
-                        srcset = img["srcset"]
-                        for part in srcset.split(","):
-                            src_url = part.strip().split(" ")[0]
-                            if src_url.startswith("//"):
-                                src_url = "https:" + src_url
-                            if src_url.startswith("http"):
-                                images.add(src_url)
+                if brand == "Viewsonic":
+                    container = soup.select_one("div#overviewGallery")
+                    if container:
+                        for img in container.find_all("img"):
+                            src = img.get("src")
+                            if src and src.startswith("http"):
+                                images.append(src)
 
-                # fallback: src attribútumok, ha nincs srcset
-                if not images:
-                    for img in soup.find_all("img"):
-                        src = img.get("src")
-                        if src:
-                            if src.startswith("//"):
-                                src = "https:" + src
-                            if src.startswith("http"):
-                                images.add(src)
+                elif brand == "Philips":
+                    container = soup.select_one("div.p-image-gallery.p-secondary")
+                    if container:
+                        for img in container.find_all("img"):
+                            # srcset esetén a legnagyobb kép
+                            if img.has_attr("srcset"):
+                                srcset = img["srcset"].split(",")
+                                max_img = srcset[-1].strip().split(" ")[0]
+                                images.append(max_img)
+                            else:
+                                src = img.get("src")
+                                if src and src.startswith("http"):
+                                    images.append(src)
 
-                return list(images)
-            except Exception as e:
+                elif brand == "AOC":
+                    container = soup.select_one("div.image-carousel")
+                    if container:
+                        for img in container.find_all("img"):
+                            src = img.get("data-zoom-image") or img.get("src")
+                            if src and src.startswith("http"):
+                                images.append(src)
+
+                return images
+            except:
                 return []
 
-        st.info("A product link-ek képeinek lekérése eltarthat néhány másodpercig oldalanként...")
+        st.info("A galéria képek lekérése eltarthat néhány másodpercig minden oldalon...")
 
-        # Minden product link képeinek kigyűjtése
+        # Képek kigyűjtése minden product linkhez
         all_images = []
-        for link in df["Product link"]:
-            images = get_high_res_images(link)
+        for idx, row in df.iterrows():
+            images = get_gallery_images(row["Product link"], row["Brand"])
             all_images.append(images)
 
         # Pick link oszlopok létrehozása dinamikusan
-        max_imgs = max(len(imgs) for imgs in all_images)
+        max_imgs = max(len(imgs) for imgs in all_images) if all_images else 0
         for i in range(max_imgs):
             df[f"Pick link {i+1}"] = [imgs[i] if i < len(imgs) else "" for imgs in all_images]
 
@@ -92,6 +97,6 @@ if uploaded_file:
         st.download_button(
             label="Letöltés Excel fájl",
             data=output.getvalue(),
-            file_name="product_links_with_images.xlsx",
+            file_name="product_links_with_gallery.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
