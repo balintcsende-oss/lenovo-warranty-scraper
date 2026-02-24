@@ -33,18 +33,51 @@ if uploaded_file:
 
         # Brand-specifikus galéria kép kigyűjtés
         def get_gallery_images(url, brand):
-            try:
-                resp = requests.get(url, timeout=5)
-                soup = BeautifulSoup(resp.text, "html.parser")
-                images = []
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
+        resp = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        images = []
 
-                if brand == "Viewsonic":
-                    container = soup.select_one("div#overviewGallery")
-                    if container:
-                        for img in container.find_all("img"):
-                            src = img.get("src")
-                            if src and src.startswith("http"):
-                                images.append(src)
+        if brand == "Viewsonic":
+
+            container = soup.select_one("div#overviewGallery")
+
+            if container:
+                for img in container.find_all("img"):
+
+                    # 1️⃣ ha van srcset → legnagyobb kép
+                    if img.has_attr("srcset"):
+                        srcset = img["srcset"].split(",")
+                        largest = srcset[-1].strip().split(" ")[0]
+                        images.append(largest)
+
+                    # 2️⃣ data-original (gyakran full size)
+                    elif img.get("data-original"):
+                        images.append(img.get("data-original"))
+
+                    # 3️⃣ data-src
+                    elif img.get("data-src"):
+                        images.append(img.get("data-src"))
+
+                    # 4️⃣ sima src fallback
+                    else:
+                        src = img.get("src")
+                        if src and src.startswith("http"):
+                            images.append(src)
+
+        # duplikátumok eltávolítása
+        images = list(dict.fromkeys(images))
+
+        # csak jpg/png képek maradjanak
+        images = [img for img in images if any(ext in img.lower() for ext in [".jpg", ".jpeg", ".png"])]
+
+        return images
+
+    except Exception as e:
+        return []
 
                 elif brand == "Philips":
                     container = soup.select_one("div.p-image-gallery.p-secondary")
