@@ -75,32 +75,34 @@ if uploaded_file:
     # -------------------------------------------------
     import re
 
-    def get_philips_gallery(url):
-        images = []
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            html = response.text
+def get_philips_gallery(url):
+    images = []
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        html = response.text
 
-            # Minden philipsconsumer asset ID kinyerése
-            pattern = r"philipsconsumer/([a-zA-Z0-9]+)"
-            matches = re.findall(pattern, html)
+        # Minden philipsconsumer asset ID kinyerése
+        pattern = r"philipsconsumer/([a-zA-Z0-9]+)"
+        matches = re.findall(pattern, html)
 
-            unique_ids = list(dict.fromkeys(matches))
+        unique_ids = list(dict.fromkeys(matches))
 
-            for asset_id in unique_ids:
-                # kizárjuk a logókat és ikonokat
-                if any(x in asset_id.lower() for x in ["logo", "icon", "banner"]):
-                    continue
+        for asset_id in unique_ids:
+            # kizárjuk a logókat és ikonokat
+            if any(x in asset_id.lower() for x in ["logo", "icon", "banner"]):
+                continue
 
-                large_url = (
-                    f"https://images.philips.com/is/image/philipsconsumer/"
-                    f"{asset_id}?$pnglarge$&wid=1250"
-                )
+            large_url = (
+                f"https://images.philips.com/is/image/philipsconsumer/"
+                f"{asset_id}?$pnglarge$&wid=1250"
+            )
 
-                images.append(large_url)
+            images.append(large_url)
 
-        except:
-            return []
+    except:
+        return []
+
+    return images
 
     return images
 
