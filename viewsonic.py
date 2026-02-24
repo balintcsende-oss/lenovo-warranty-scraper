@@ -36,58 +36,53 @@ if uploaded_file:
     # -------------------------------------------------
     def get_viewsonic_gallery(url):
 
-        images = []
+    images = []
 
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-            }
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
 
-            response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return []
 
-            if response.status_code != 200:
-                return []
+        soup = BeautifulSoup(response.text, "html.parser")
 
-            soup = BeautifulSoup(response.text, "html.parser")
-
-            container = soup.select_one("div#overviewGallery")
-
-            if not container:
-                return []
-
+        # 🔎 1️⃣ próbáljuk a HTML galériát
+        container = soup.select_one("div#overviewGallery")
+        if container:
             for img in container.find_all("img"):
-
-                # 1️⃣ srcset → legnagyobb kép
                 if img.has_attr("srcset"):
                     srcset = img["srcset"].split(",")
                     largest = srcset[-1].strip().split(" ")[0]
                     images.append(largest)
 
-                # 2️⃣ data-original
-                elif img.get("data-original"):
-                    images.append(img.get("data-original"))
+        # 🔎 2️⃣ ha csak 1 kép van → keresünk script-ben
+        if len(images) <= 1:
 
-                # 3️⃣ data-src
-                elif img.get("data-src"):
-                    images.append(img.get("data-src"))
+            scripts = soup.find_all("script")
 
-                # 4️⃣ fallback src
-                else:
-                    src = img.get("src")
-                    if src and src.startswith("http"):
-                        images.append(src)
+            for script in scripts:
+                if script.string:
+                    text = script.string
 
-            # duplikátumok eltávolítása
-            images = list(dict.fromkeys(images))
+                    if "jpg" in text or "png" in text:
+                        parts = text.split('"')
+                        for part in parts:
+                            if part.startswith("http") and any(ext in part.lower() for ext in [".jpg", ".jpeg", ".png"]):
 
-            # csak valódi képfájlok
-            images = [
-                img for img in images
-                if any(ext in img.lower() for ext in [".jpg", ".jpeg", ".png"])
-            ]
+                                # kiszűrjük az ikonokat/logókat
+                                if not any(x in part.lower() for x in ["logo", "icon", "thumb", "sprite"]):
+                                    images.append(part)
 
-        except Exception:
-            return []
+        # duplikátum törlés
+        images = list(dict.fromkeys(images))
+
+        return images
+
+    except:
+        return []
 
         return images
 
