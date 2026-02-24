@@ -84,7 +84,6 @@ if uploaded_file:
     except:
         return []
 
-        return images
 
     st.info("ViewSonic galéria képek lekérése...")
 
