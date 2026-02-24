@@ -4,82 +4,94 @@ import requests
 from bs4 import BeautifulSoup
 import io
 
-st.title("Product gallery high‑res image scraper")
+st.title("VPN Product Link + High-Res Pick Links")
 
-uploaded_file = st.file_uploader("Excel feltöltése", type=["xlsx"])
+uploaded_file = st.file_uploader("Töltsd fel az Excel fájlt", type=["xlsx"])
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
 
-    def generate_link(vpn, brand):
-        vpn = str(vpn)
-        brand = str(brand).strip()
-        if brand == "Philips":
-            return f"https://www.philips.hu/c-p/{vpn.replace('/', '_')}/"
-        elif brand == "AOC":
-            return f"https://www.aoc.com/hu/gaming/monitors/{vpn.lower()}"
-        elif brand == "Viewsonic":
-            return f"https://www.viewsonic.com/hu/products/lcd/{vpn}"
-        return ""
+    # Ellenőrizzük a szükséges oszlopokat
+    required_columns = ["VPN", "Brand"]
+    if not all(col in df.columns for col in required_columns):
+        st.error("Az Excel fájlnak tartalmaznia kell a 'VPN' és 'Brand' oszlopokat!")
+    else:
 
-    df["Product link"] = df.apply(lambda r: generate_link(r["VPN"], r["Brand"]), axis=1)
+        # Product link generáló
+        def generate_link(vpn, brand):
+            if pd.isna(vpn) or pd.isna(brand):
+                return ""
+            vpn = str(vpn)
+            brand = str(brand).strip()
+            if brand == "Philips":
+                return f"https://www.philips.hu/c-p/{vpn.replace('/', '_')}/"
+            elif brand == "AOC":
+                return f"https://www.aoc.com/hu/gaming/monitors/{vpn.lower()}"
+            elif brand == "Viewsonic":
+                return f"https://www.viewsonic.com/hu/products/lcd/{vpn}"
+            else:
+                return ""
 
-    def get_high_res_images(url):
-        try:
-            res = requests.get(url, timeout=5)
-            soup = BeautifulSoup(res.text, "html.parser")
-            images = set()
+        # Product link oszlop
+        df["Product link"] = df.apply(lambda r: generate_link(r["VPN"], r["Brand"]), axis=1)
 
-            # keresés srcset attribútum alapján (magas felbontás)
-            for tag in soup.find_all("img"):
-                if tag.has_attr("srcset"):
-                    srcset = tag["srcset"]
-                    parts = srcset.split(",")
-                    for p in parts:
-                        p_url = p.strip().split(" ")[0]
-                        if p_url.startswith("//"):
-                            p_url = "https:" + p_url
-                        if p_url.startswith("http"):
-                            images.add(p_url)
+        # Funkció a nagyfelbontású galéria képek kigyűjtésére
+        def get_high_res_images(url):
+            try:
+                resp = requests.get(url, timeout=5)
+                soup = BeautifulSoup(resp.text, "html.parser")
+                images = set()
 
-            # fallback: csak src attribútum
-            if not images:
-                for tag in soup.find_all("img"):
-                    src = tag.get("src")
-                    if src:
-                        if src.startswith("//"):
-                            src = "https:" + src
-                        if src.startswith("http"):
-                            images.add(src)
+                # srcset attribútumok keresése (általában nagy felbontású képek)
+                for img in soup.find_all("img"):
+                    if img.has_attr("srcset"):
+                        srcset = img["srcset"]
+                        for part in srcset.split(","):
+                            src_url = part.strip().split(" ")[0]
+                            if src_url.startswith("//"):
+                                src_url = "https:" + src_url
+                            if src_url.startswith("http"):
+                                images.add(src_url)
 
-            return list(images)
+                # fallback: src attribútumok, ha nincs srcset
+                if not images:
+                    for img in soup.find_all("img"):
+                        src = img.get("src")
+                        if src:
+                            if src.startswith("//"):
+                                src = "https:" + src
+                            if src.startswith("http"):
+                                images.add(src)
 
-        except Exception as e:
-            return []
+                return list(images)
+            except Exception as e:
+                return []
 
-    all_images = []
-    for link in df["Product link"]:
-        imgs = get_high_res_images(link)
-        all_images.append(imgs)
+        st.info("A product link-ek képeinek lekérése eltarthat néhány másodpercig oldalanként...")
 
-    # Oszlopok dinamikus létrehozása
-    max_imgs = max(len(imgs) for imgs in all_images)
-    for i in range(max_imgs):
-        df[f"Pick link {i+1}"] = [
-            imgs[i] if i < len(imgs) else ""
-            for imgs in all_images
-        ]
+        # Minden product link képeinek kigyűjtése
+        all_images = []
+        for link in df["Product link"]:
+            images = get_high_res_images(link)
+            all_images.append(images)
 
-    st.dataframe(df)
+        # Pick link oszlopok létrehozása dinamikusan
+        max_imgs = max(len(imgs) for imgs in all_images)
+        for i in range(max_imgs):
+            df[f"Pick link {i+1}"] = [imgs[i] if i < len(imgs) else "" for imgs in all_images]
 
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False)
-    output.seek(0)
+        st.subheader("Eredmény")
+        st.dataframe(df)
 
-    st.download_button(
-        "Letöltés Excel",
-        data=output,
-        file_name="image_links.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        # Excel mentése openpyxl-lel
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False)
+        output.seek(0)
+
+        st.download_button(
+            label="Letöltés Excel fájl",
+            data=output.getvalue(),
+            file_name="product_links_with_images.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
