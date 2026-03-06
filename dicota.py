@@ -29,7 +29,6 @@ if uploaded_file:
 
     if st.button("Scrape indítása"):
 
-        # Eredmény listák
         results = []
 
         headers = {
@@ -105,12 +104,6 @@ if uploaded_file:
 
                 soup = BeautifulSoup(r.text, "html.parser")
 
-                # TITLE
-                title = ""
-                span = soup.find("span", {"li-object": "product.title"})
-                if span:
-                    title = span.text.strip()
-
                 # HANDLE
                 handle = ""
                 link = soup.find("a", class_="predictive-search_line-item")
@@ -132,10 +125,14 @@ if uploaded_file:
                     continue
 
                 # Adatok összegyűjtése
-                product_data["sku"] = sku
-                product_data["handle"] = handle
-                results.append(product_data)
+                product_data_ordered = {
+                    "sku": sku,
+                    "handle": handle,
+                    "handle_link": f"https://www.dicota.com/products/{handle}",
+                    **product_data
+                }
 
+                results.append(product_data_ordered)
                 log.text(f"{sku} → {product_data['title']} | {handle}")
 
             except Exception as e:
@@ -146,6 +143,11 @@ if uploaded_file:
 
         # DataFrame készítése
         result_df = pd.DataFrame(results)
+
+        # Sorrend biztosítása
+        cols = ["sku", "handle", "handle_link"] + [c for c in result_df.columns if c not in ["sku", "handle", "handle_link"]]
+        result_df = result_df[cols]
+
         st.subheader("Eredmények")
         st.dataframe(result_df)
 
