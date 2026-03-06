@@ -2,158 +2,107 @@ import streamlit as st
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-import re
 import tempfile
+import re
 
-st.set_page_config(page_title="Dicota Product Scraper", layout="wide")
+st.set_page_config(page_title="Dicota Full Product Scraper", layout="wide")
+st.title("Dicota – Full Product Data by Handle")
 
-st.title("Dicota SKU → Full Product Data")
-
-uploaded_file = st.file_uploader("Excel feltöltése", type=["xlsx"])
+uploaded_file = st.file_uploader("Excel feltöltése (SKU + handle)", type=["xlsx"])
 
 headers = {
     "User-Agent": "Mozilla/5.0",
     "Accept-Language": "en-US,en;q=0.9"
 }
 
-
-def get_handle_and_title(sku):
-
-    url = f"https://www.dicota.com/search/suggest?q={sku}&section_id=predictive_search"
-
-    r = requests.get(url, headers=headers)
-
-    if r.status_code != 200:
-        return "", ""
-
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    title = ""
-    handle = ""
-
-    span = soup.find("span", {"li-object": "product.title"})
-    if span:
-        title = span.text.strip()
-
-    link = soup.find("a", class_="predictive-search_line-item")
-
-    if link and "href" in link.attrs:
-        href = link["href"]
-        if "/products/" in href:
-            handle = href.split("/products/")[1].split("?")[0]
-
-    return title, handle
-
-
-def scrape_product(handle):
-
+def scrape_product_by_handle(handle):
     url = f"https://www.dicota.com/products/{handle}"
-
     r = requests.get(url, headers=headers)
-
+    if r.status_code != 200:
+        return None
     soup = BeautifulSoup(r.text, "html.parser")
-
     data = {}
 
     # TITLE
-    title = soup.find("h1")
-    data["title"] = title.text.strip() if title else ""
+    title_tag = soup.find("h1")
+    data["title"] = title_tag.text.strip() if title_tag else ""
 
     # DESCRIPTION
-    desc = soup.find("div", class_=re.compile("rich-text"))
-    data["description"] = desc.text.strip() if desc else ""
+    desc_tag = soup.find("div", class_=re.compile("rich-text"))
+    data["description"] = desc_tag.text.strip() if desc_tag else ""
 
-    # BULLETS
+    # BULLETS / FEATURES
     bullets = soup.find_all("li")
-    features = [b.text.strip() for b in bullets if len(b.text.strip()) > 20]
-
-    data["features"] = " | ".join(features[:6])
+    features = [b.text.strip() for b in bullets if len(b.text.strip())>5]
+    data["features"] = " | ".join(features[:10])
 
     # IMAGES
     images = []
-    imgs = soup.find_all("img")
-
-    for img in imgs:
+    for img in soup.find_all("img"):
         src = img.get("src")
-
         if src and "cdn.shopify.com" in src:
             if src.startswith("//"):
                 src = "https:" + src
             images.append(src)
-
-    images = list(dict.fromkeys(images))
-
+    images = list(dict.fromkeys(images))  # unique
     for i in range(5):
         data[f"image_{i+1}"] = images[i] if i < len(images) else ""
 
     # PRICE
-    price = soup.find(string=re.compile("Ft"))
-    data["price"] = price if price else ""
+    price_tag = soup.find(string=re.compile("Ft"))
+    data["price"] = price_tag if price_tag else ""
+
+    # PRODUCT TYPE / VENDOR
+    type_tag = soup.find("div", {"li-object": "product.type"})
+    data["product_type"] = type_tag.text.strip() if type_tag else ""
+
+    vendor_tag = soup.find("div", {"li-object": "product.vendor"})
+    data["vendor"] = vendor_tag.text.strip() if vendor_tag else ""
 
     return data
 
-
 if uploaded_file:
-
     df = pd.read_excel(uploaded_file)
 
-    sku_col = None
-
+    # Ellenőrizzük, hogy van handle oszlop
+    handle_col = None
     for col in df.columns:
-        if "sku" in col.lower():
-            sku_col = col
+        if "handle" in col.lower():
+            handle_col = col
             break
-
-    if sku_col is None:
-        st.error("Nincs SKU oszlop")
+    if handle_col is None:
+        st.error("Nincs handle oszlop az Excelben!")
         st.stop()
 
     if st.button("Scrape indítása"):
-
         results = []
-
         progress = st.progress(0)
         log = st.empty()
-
         total = len(df)
 
-        for i, sku in enumerate(df[sku_col]):
-
-            sku = str(sku).strip()
-
+        for i, row in df.iterrows():
+            handle = str(row[handle_col]).strip()
+            sku = row.get("SKU", "")
             try:
-
-                title, handle = get_handle_and_title(sku)
-
-                if handle == "":
-                    log.text(f"{sku} → nincs találat")
+                product_data = scrape_product_by_handle(handle)
+                if product_data is None:
+                    log.text(f"{sku} → {handle} → HTTP hiba")
                     continue
-
-                product_data = scrape_product(handle)
-
                 product_data["sku"] = sku
                 product_data["handle"] = handle
-
                 results.append(product_data)
-
-                log.text(f"{sku} → OK")
-
+                log.text(f"{sku} → {handle} → OK")
             except Exception as e:
-
-                log.text(f"{sku} → ERROR {e}")
-
-            progress.progress((i + 1) / total)
+                log.text(f"{sku} → {handle} → ERROR {e}")
+            progress.progress((i+1)/total)
 
         result_df = pd.DataFrame(results)
-
         st.subheader("Eredmény")
-
         st.dataframe(result_df)
 
+        # Excel export
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-
         result_df.to_excel(tmp.name, index=False)
-
         with open(tmp.name, "rb") as f:
             st.download_button(
                 "Excel letöltése",
