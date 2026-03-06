@@ -2,47 +2,41 @@ import streamlit as st
 import pandas as pd
 import requests
 import tempfile
+import json
+from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="Dicota Scraper", layout="wide")
-st.title("Dicota SKU → Full Product Data by Handle (All Fields)")
+st.title("Dicota SKU → Full Product Data (All Variants)")
 
 uploaded_file = st.file_uploader("Excel feltöltése", type=["xlsx"])
 
 if uploaded_file:
-
     df = pd.read_excel(uploaded_file)
-
+    
     # SKU oszlop keresése
     sku_col = next((c for c in df.columns if "sku" in c.lower()), None)
-
     if sku_col is None:
         st.error("Nem található SKU oszlop")
         st.stop()
-
     st.success(f"SKU oszlop: {sku_col}")
 
     if st.button("Scrape indítása"):
-
         results = []
-
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
             "Accept-Language": "en-US,en;q=0.9"
         }
-
         progress = st.progress(0)
         log = st.empty()
 
-        import json
-        from bs4 import BeautifulSoup
-
         def scrape_product_json(handle):
-            link = f"https://www.dicota.com/products/{handle}.json"
-            r = requests.get(link, headers=headers)
+            url = f"https://www.dicota.com/products/{handle}.json"
+            r = requests.get(url, headers=headers)
             if r.status_code != 200 or not r.text.strip():
                 return None
             data = r.json().get("product", {})
             result = {}
+
             # Alap adatok
             result["handle"] = data.get("handle", "")
             result["title"] = data.get("title", "")
@@ -56,16 +50,13 @@ if uploaded_file:
                 result[f"option_{i+1}_name"] = option.get("name", "")
                 result[f"option_{i+1}_values"] = ", ".join(option.get("values", []))
 
-            # Variants
+            # Variants - minden elérhető mező
             for i, variant in enumerate(data.get("variants", [])):
-                result[f"variant_{i+1}_id"] = variant.get("id", "")
-                result[f"variant_{i+1}_sku"] = variant.get("sku", "")
-                result[f"variant_{i+1}_price"] = variant.get("price", "")
-                result[f"variant_{i+1}_inventory"] = variant.get("inventory_quantity", "")
-                result[f"variant_{i+1}_weight"] = variant.get("weight", "")
-                result[f"variant_{i+1}_option1"] = variant.get("option1", "")
-                result[f"variant_{i+1}_option2"] = variant.get("option2", "")
-                result[f"variant_{i+1}_option3"] = variant.get("option3", "")
+                for key, value in variant.items():
+                    # Ha dict típusú (pl. quantity_rule, quantity_price_breaks), stringre alakítjuk
+                    if isinstance(value, (dict, list)):
+                        value = json.dumps(value, ensure_ascii=False)
+                    result[f"variant_{i+1}_{key}"] = value
 
             # Images
             images = [img.get("src", "") for img in data.get("images", [])]
@@ -80,15 +71,10 @@ if uploaded_file:
             return result
 
         for i, sku in enumerate(df[sku_col]):
-            row = {
-                "sku": sku if pd.notna(sku) else "",
-                "handle": "",
-                "handle_link": ""
-            }
-
+            row = {"sku": sku if pd.notna(sku) else "", "handle": "", "handle_link": ""}
             if pd.isna(sku):
                 results.append(row)
-                progress.progress((i + 1)/len(df))
+                progress.progress((i+1)/len(df))
                 continue
 
             sku_str = str(sku).strip()
@@ -141,5 +127,5 @@ if uploaded_file:
             st.download_button(
                 "Excel letöltése",
                 f,
-                file_name="dicota_full_all_fields.xlsx"
+                file_name="dicota_full_all_variants.xlsx"
             )
