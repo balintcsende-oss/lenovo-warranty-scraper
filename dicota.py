@@ -1,107 +1,162 @@
 import streamlit as st
 import pandas as pd
 import requests
+from bs4 import BeautifulSoup
+import re
 import tempfile
 
-st.set_page_config(page_title="Dicota Scraper", layout="wide")
-st.title("Dicota SKU → Full Product Data by Handle JSON")
+st.set_page_config(page_title="Dicota Product Scraper", layout="wide")
+
+st.title("Dicota SKU → Full Product Data")
 
 uploaded_file = st.file_uploader("Excel feltöltése", type=["xlsx"])
+
+headers = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept-Language": "en-US,en;q=0.9"
+}
+
+
+def get_handle_and_title(sku):
+
+    url = f"https://www.dicota.com/search/suggest?q={sku}&section_id=predictive_search"
+
+    r = requests.get(url, headers=headers)
+
+    if r.status_code != 200:
+        return "", ""
+
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    title = ""
+    handle = ""
+
+    span = soup.find("span", {"li-object": "product.title"})
+    if span:
+        title = span.text.strip()
+
+    link = soup.find("a", class_="predictive-search_line-item")
+
+    if link and "href" in link.attrs:
+        href = link["href"]
+        if "/products/" in href:
+            handle = href.split("/products/")[1].split("?")[0]
+
+    return title, handle
+
+
+def scrape_product(handle):
+
+    url = f"https://www.dicota.com/products/{handle}"
+
+    r = requests.get(url, headers=headers)
+
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    data = {}
+
+    # TITLE
+    title = soup.find("h1")
+    data["title"] = title.text.strip() if title else ""
+
+    # DESCRIPTION
+    desc = soup.find("div", class_=re.compile("rich-text"))
+    data["description"] = desc.text.strip() if desc else ""
+
+    # BULLETS
+    bullets = soup.find_all("li")
+    features = [b.text.strip() for b in bullets if len(b.text.strip()) > 20]
+
+    data["features"] = " | ".join(features[:6])
+
+    # IMAGES
+    images = []
+    imgs = soup.find_all("img")
+
+    for img in imgs:
+        src = img.get("src")
+
+        if src and "cdn.shopify.com" in src:
+            if src.startswith("//"):
+                src = "https:" + src
+            images.append(src)
+
+    images = list(dict.fromkeys(images))
+
+    for i in range(5):
+        data[f"image_{i+1}"] = images[i] if i < len(images) else ""
+
+    # PRICE
+    price = soup.find(string=re.compile("Ft"))
+    data["price"] = price if price else ""
+
+    return data
+
 
 if uploaded_file:
 
     df = pd.read_excel(uploaded_file)
 
-    # SKU oszlop keresése
     sku_col = None
+
     for col in df.columns:
         if "sku" in col.lower():
             sku_col = col
             break
 
     if sku_col is None:
-        st.error("Nem található SKU oszlop")
+        st.error("Nincs SKU oszlop")
         st.stop()
-
-    st.success(f"SKU oszlop: {sku_col}")
 
     if st.button("Scrape indítása"):
 
         results = []
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Accept-Language": "en-US,en;q=0.9"
-        }
-
         progress = st.progress(0)
         log = st.empty()
 
-        # Definiáljuk az oszlopokat
-        default_columns = [
-            "sku", "handle", "handle_link",
-            "title", "description", "product_type", "vendor", "price",
-            "image_1", "image_2", "image_3", "image_4", "image_5"
-        ]
+        total = len(df)
 
         for i, sku in enumerate(df[sku_col]):
-            # Alap dict minden SKU-ra
-            result_dict = {col: "" for col in default_columns}
-            if pd.isna(sku):
-                results.append(result_dict)
-                progress.progress((i + 1) / len(df))
-                continue
 
             sku = str(sku).strip()
-            result_dict["sku"] = sku
-            handle_link = f"https://www.dicota.com/products/{sku}.json"
-            result_dict["handle_link"] = handle_link
 
             try:
-                r = requests.get(handle_link, headers=headers)
-                if r.status_code != 200 or not r.text.strip():
-                    log.text(f"{sku} → nincs elérhető JSON (HTTP {r.status_code})")
-                    results.append(result_dict)
-                    progress.progress((i + 1) / len(df))
+
+                title, handle = get_handle_and_title(sku)
+
+                if handle == "":
+                    log.text(f"{sku} → nincs találat")
                     continue
 
-                data = r.json()
-                product = data.get("product", {})
+                product_data = scrape_product(handle)
 
-                result_dict["handle"] = product.get("handle", "")
-                result_dict["title"] = product.get("title", "")
-                result_dict["description"] = product.get("body_html", "")
-                result_dict["product_type"] = product.get("product_type", "")
-                result_dict["vendor"] = product.get("vendor", "")
-                variants = product.get("variants", [{}])
-                result_dict["price"] = variants[0].get("price", "") if variants else ""
+                product_data["sku"] = sku
+                product_data["handle"] = handle
 
-                images = [img.get("src", "") for img in product.get("images", [])]
-                while len(images) < 5:
-                    images.append("")
-                for j in range(5):
-                    result_dict[f"image_{j+1}"] = images[j]
+                results.append(product_data)
 
-                log.text(f"{sku} → {result_dict['title']} | {result_dict['handle']}")
+                log.text(f"{sku} → OK")
 
             except Exception as e:
+
                 log.text(f"{sku} → ERROR {e}")
 
-            results.append(result_dict)
-            progress.progress((i + 1) / len(df))
+            progress.progress((i + 1) / total)
 
-        # DataFrame készítése
         result_df = pd.DataFrame(results)
 
-        st.subheader("Eredmények")
+        st.subheader("Eredmény")
+
         st.dataframe(result_df)
 
-        # Excel export
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+
         result_df.to_excel(tmp.name, index=False)
+
         with open(tmp.name, "rb") as f:
             st.download_button(
                 "Excel letöltése",
                 f,
-                file_name="dicota_full_results.xlsx"
+                file_name="dicota_products.xlsx"
             )
