@@ -4,7 +4,7 @@ import requests
 import tempfile
 
 st.set_page_config(page_title="Dicota Scraper", layout="wide")
-st.title("Dicota SKU → Full Product Data by Handle")
+st.title("Dicota SKU → Full Product Data by Handle (All Fields)")
 
 uploaded_file = st.file_uploader("Excel feltöltése", type=["xlsx"])
 
@@ -13,11 +13,7 @@ if uploaded_file:
     df = pd.read_excel(uploaded_file)
 
     # SKU oszlop keresése
-    sku_col = None
-    for col in df.columns:
-        if "sku" in col.lower():
-            sku_col = col
-            break
+    sku_col = next((c for c in df.columns if "sku" in c.lower()), None)
 
     if sku_col is None:
         st.error("Nem található SKU oszlop")
@@ -37,65 +33,75 @@ if uploaded_file:
         progress = st.progress(0)
         log = st.empty()
 
-        # Segédfüggvény: handle alapján scrape JSON
-        def scrape_product_by_handle(handle):
+        import json
+        from bs4 import BeautifulSoup
+
+        def scrape_product_json(handle):
             link = f"https://www.dicota.com/products/{handle}.json"
             r = requests.get(link, headers=headers)
             if r.status_code != 200 or not r.text.strip():
                 return None
             data = r.json().get("product", {})
             result = {}
+            # Alap adatok
             result["handle"] = data.get("handle", "")
             result["title"] = data.get("title", "")
-            result["description"] = data.get("body_html", "")
-            result["product_type"] = data.get("product_type", "")
+            result["body_html"] = data.get("body_html", "")
             result["vendor"] = data.get("vendor", "")
-            variants = data.get("variants", [{}])
-            result["price"] = variants[0].get("price", "") if variants else ""
+            result["product_type"] = data.get("product_type", "")
+            result["tags"] = ", ".join(data.get("tags", [])) if isinstance(data.get("tags", []), list) else data.get("tags", "")
+
+            # Options
+            for i, option in enumerate(data.get("options", [])):
+                result[f"option_{i+1}_name"] = option.get("name", "")
+                result[f"option_{i+1}_values"] = ", ".join(option.get("values", []))
+
+            # Variants
+            for i, variant in enumerate(data.get("variants", [])):
+                result[f"variant_{i+1}_id"] = variant.get("id", "")
+                result[f"variant_{i+1}_sku"] = variant.get("sku", "")
+                result[f"variant_{i+1}_price"] = variant.get("price", "")
+                result[f"variant_{i+1}_inventory"] = variant.get("inventory_quantity", "")
+                result[f"variant_{i+1}_weight"] = variant.get("weight", "")
+                result[f"variant_{i+1}_option1"] = variant.get("option1", "")
+                result[f"variant_{i+1}_option2"] = variant.get("option2", "")
+                result[f"variant_{i+1}_option3"] = variant.get("option3", "")
+
+            # Images
             images = [img.get("src", "") for img in data.get("images", [])]
-            while len(images) < 5:
-                images.append("")
-            for i in range(5):
-                result[f"image_{i+1}"] = images[i]
+            for i in range(10):
+                result[f"image_{i+1}"] = images[i] if i < len(images) else ""
+
+            # Dátumok
+            result["created_at"] = data.get("created_at", "")
+            result["updated_at"] = data.get("updated_at", "")
+            result["published_at"] = data.get("published_at", "")
+
             return result
 
-        # Iterálunk a SKU-kon
         for i, sku in enumerate(df[sku_col]):
-            result_dict = {
+            row = {
                 "sku": sku if pd.notna(sku) else "",
                 "handle": "",
-                "handle_link": "",
-                "title": "",
-                "description": "",
-                "product_type": "",
-                "vendor": "",
-                "price": "",
-                "image_1": "",
-                "image_2": "",
-                "image_3": "",
-                "image_4": "",
-                "image_5": ""
+                "handle_link": ""
             }
 
             if pd.isna(sku):
-                results.append(result_dict)
-                progress.progress((i + 1) / len(df))
+                results.append(row)
+                progress.progress((i + 1)/len(df))
                 continue
 
             sku_str = str(sku).strip()
-
-            # 1️⃣ Keresés a predictive search-ből a handle kinyeréséhez
+            # 1️⃣ Predictive search handle kinyeréséhez
             search_url = f"https://www.dicota.com/search/suggest?q={sku_str}&section_id=predictive_search&resources[options][fields]=variants.sku,variants.title,product_type,title,vendor"
             try:
                 r = requests.get(search_url, headers=headers)
                 if r.status_code != 200:
                     log.text(f"{sku_str} → HTTP {r.status_code}")
-                    results.append(result_dict)
-                    progress.progress((i + 1) / len(df))
+                    results.append(row)
+                    progress.progress((i+1)/len(df))
                     continue
 
-                # BeautifulSoup-ot használunk a handle kinyerésére
-                from bs4 import BeautifulSoup
                 soup = BeautifulSoup(r.text, "html.parser")
                 link_tag = soup.find("a", class_="predictive-search_line-item")
                 handle = ""
@@ -106,25 +112,24 @@ if uploaded_file:
 
                 if not handle:
                     log.text(f"{sku_str} → nincs handle")
-                    results.append(result_dict)
-                    progress.progress((i + 1) / len(df))
+                    results.append(row)
+                    progress.progress((i+1)/len(df))
                     continue
 
-                # 2️⃣ Handle alapján lekérjük a teljes adatot a JSON-ból
-                product_data = scrape_product_by_handle(handle)
+                # JSON alapján teljes adat
+                product_data = scrape_product_json(handle)
                 if product_data:
-                    result_dict.update(product_data)
-                    result_dict["handle_link"] = f"https://www.dicota.com/products/{handle}.json"
+                    row.update(product_data)
+                    row["handle_link"] = f"https://www.dicota.com/products/{handle}.json"
 
-                log.text(f"{sku_str} → {result_dict['title']} | {handle}")
+                log.text(f"{sku_str} → {row.get('title','')} | {handle}")
 
             except Exception as e:
                 log.text(f"{sku_str} → ERROR {e}")
 
-            results.append(result_dict)
-            progress.progress((i + 1) / len(df))
+            results.append(row)
+            progress.progress((i+1)/len(df))
 
-        # DataFrame készítése
         result_df = pd.DataFrame(results)
         st.subheader("Eredmények")
         st.dataframe(result_df)
@@ -136,5 +141,5 @@ if uploaded_file:
             st.download_button(
                 "Excel letöltése",
                 f,
-                file_name="dicota_full_results.xlsx"
+                file_name="dicota_full_all_fields.xlsx"
             )
