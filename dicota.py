@@ -1,17 +1,19 @@
 import streamlit as st
 import pandas as pd
-from playwright.sync_api import sync_playwright
+import requests
+from bs4 import BeautifulSoup
 import tempfile
 
-st.title("Dicota Product Title Scraper (Playwright)")
+st.set_page_config(page_title="Dicota Product Title Scraper")
+st.title("Dicota Product Title Scraper")
 
-# Excel feltöltés
+# 1️⃣ Excel feltöltés
 uploaded_file = st.file_uploader("Excel feltöltése (.xlsx)", type=["xlsx"])
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
 
-    # SKU oszlop keresése
+    # 2️⃣ SKU oszlop keresése
     sku_col = None
     for col in df.columns:
         if "sku" in col.lower():
@@ -27,36 +29,46 @@ if uploaded_file:
 
             titles = []
 
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                page = browser.new_page()
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) "
+                              "Chrome/118.0.5993.90 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            }
 
-                progress_text = st.empty()
-                progress_bar = st.progress(0)
+            progress_text = st.empty()
+            progress_bar = st.progress(0)
 
-                for i, sku in enumerate(df[sku_col]):
-                    if pd.isna(sku):
+            for i, sku in enumerate(df[sku_col]):
+                if pd.isna(sku):
+                    titles.append("")
+                    continue
+
+                sku = str(sku).strip()
+                url = f"https://www.dicota.com/search/suggest?q={sku}&section_id=predictive_search&resources[options][fields]=variants.sku,variants.title,product_type,title,vendor"
+
+                try:
+                    resp = requests.get(url, headers=headers)
+                    if resp.status_code != 200:
                         titles.append("")
+                        progress_text.text(f"Hiba: {sku} → HTTP {resp.status_code}")
                         continue
 
-                    sku = str(sku).strip()
-                    url = f"https://www.dicota.com/search?type=product&q={sku}"
-                    page.goto(url)
-
-                    try:
-                        # várunk, amíg a product.title megjelenik (max 5 sec)
-                        page.wait_for_selector('[li-object="product.title"]', timeout=5000)
-                        title_elem = page.query_selector('[li-object="product.title"]')
-                        title = title_elem.inner_text().strip() if title_elem else ""
-                    except:
-                        title = ""
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    title = ""
+                    span = soup.find("span", {"li-object": "product.title"})
+                    if span:
+                        title = span.text.strip()
 
                     titles.append(title)
+                    progress_text.text(f"{sku} → {title}")
 
-                    progress_text.text(f"Keresés: {sku} → {title}")
-                    progress_bar.progress((i + 1) / len(df))
+                except Exception as e:
+                    titles.append("")
+                    progress_text.text(f"Hiba: {sku} → {e}")
 
-                browser.close()
+                progress_bar.progress((i + 1) / len(df))
 
             df["product_title"] = titles
 
