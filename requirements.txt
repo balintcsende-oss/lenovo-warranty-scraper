@@ -6,3 +6,5 @@ beautifulsoup4
 selenium
 webdriver-manager
 playwright
+curl_cffi
+demjson3
