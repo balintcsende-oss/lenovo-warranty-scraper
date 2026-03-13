@@ -64,9 +64,12 @@ if uploaded:
 
     df_input = pd.read_excel(uploaded)
 
-    if "sku" not in df_input.columns:
-        st.error("Nincs sku oszlop")
-        st.stop()
+    # oszlopnevek normalizálása
+df_input.columns = df_input.columns.str.strip().str.lower()
+
+if "sku" not in df_input.columns:
+    st.error(f"Nincs sku oszlop. Talált oszlopok: {list(df_input.columns)}")
+    st.stop()
 
     skus = df_input["sku"].dropna().astype(str).tolist()
 
