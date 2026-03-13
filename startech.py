@@ -1,22 +1,25 @@
 import streamlit as st
-from curl_cffi import requests
-import re
-import demjson3
 import pandas as pd
 import io
+import re
+import demjson3
+from curl_cffi import requests
 
-st.title("StarTech SKU scraper")
+st.title("StarTech SKU Scraper")
 
-sku_input = st.text_area(
-    "SKU lista (egy sor = egy SKU)",
-    height=200
+uploaded = st.file_uploader(
+    "Excel feltöltése (kell egy 'sku' oszlop)",
+    type=["xlsx"]
 )
 
 def scrape_sku(sku):
 
     url = f"https://www.startech.com/en-us/universal-laptop-docking-stations/{sku.lower()}"
 
-    html = requests.get(url, impersonate="chrome").text
+    try:
+        html = requests.get(url, impersonate="chrome", timeout=30).text
+    except:
+        return {"sku": sku, "error": "request error"}
 
     matches = re.findall(r"modParam\s*=\s*(\{.*?\});", html, re.S)
 
@@ -38,7 +41,7 @@ def scrape_sku(sku):
             break
 
     if not product:
-        return {"sku": sku, "error": "no product"}
+        return {"sku": sku, "error": "no product data"}
 
     row = {}
 
@@ -46,41 +49,50 @@ def scrape_sku(sku):
     row["title"] = product.get("title")
     row["upc"] = product.get("upc")
 
+    # specs
     for spec in product.get("technical", {}).get("techSpecs", []):
         row[spec.get("attributeText")] = spec.get("attributeValue")
 
+    # images
     for i, img in enumerate(product.get("galleryImages", [])):
         row[f"image_{i+1}"] = img.get("largeUrl")
 
     return row
 
 
-if st.button("SCRAPE"):
+if uploaded:
 
-    skus = [s.strip() for s in sku_input.split("\n") if s.strip()]
+    df_input = pd.read_excel(uploaded)
 
-    results = []
+    if "sku" not in df_input.columns:
+        st.error("Nincs sku oszlop")
+        st.stop()
 
-    progress = st.progress(0)
+    skus = df_input["sku"].dropna().astype(str).tolist()
 
-    for i, sku in enumerate(skus):
+    if st.button("SCRAPE"):
 
-        results.append(scrape_sku(sku))
+        results = []
 
-        progress.progress((i+1)/len(skus))
+        progress = st.progress(0)
 
-    df = pd.DataFrame(results)
+        for i, sku in enumerate(skus):
 
-    buffer = io.BytesIO()
-    df.to_excel(buffer, index=False)
+            results.append(scrape_sku(sku))
 
-    st.success("Kész")
+            progress.progress((i + 1) / len(skus))
 
-    st.download_button(
-        label="Excel letöltés",
-        data=buffer.getvalue(),
-        file_name="startech_products.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        df = pd.DataFrame(results)
 
-    st.dataframe(df)
+        buffer = io.BytesIO()
+        df.to_excel(buffer, index=False)
+
+        st.success("Kész")
+
+        st.download_button(
+            "Excel letöltés",
+            buffer.getvalue(),
+            file_name="startech_products.xlsx"
+        )
+
+        st.dataframe(df)
