@@ -2,70 +2,58 @@ import streamlit as st
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-import concurrent.futures
 import time
+import concurrent.futures
 
-st.title("Kensington PRO scraper")
+st.title("Kensington Google scraper")
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+HEADERS = {
+    "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+}
 
 
-# ---------------- SEARCH ENGINE 1 ----------------
+# ---------------- GOOGLE SEARCH ----------------
 
-def search_bing(sku):
+def google_search(sku):
 
-    q = f'site:kensington.com "{sku}"'
+    query = f'site:kensington.com "{sku}"'
 
     r = requests.get(
-        "https://www.bing.com/search",
-        params={"q": q},
+        "https://www.google.com/search",
+        params={"q": query, "num": 5},
         headers=HEADERS,
         timeout=20
     )
 
-    soup = BeautifulSoup(r.text, "html.parser")
+    soup = BeautifulSoup(r.text, "lxml")
 
-    for a in soup.select("li.b_algo h2 a"):
-        link = a.get("href")
-        if "/p/" in link:
-            return link
+    for a in soup.select("a"):
 
-    return None
+        href = a.get("href")
 
+        if not href:
+            continue
 
-# ---------------- SEARCH ENGINE 2 ----------------
+        if "/url?q=" in href and "kensington.com" in href:
 
-def search_ddg(sku):
+            link = href.split("/url?q=")[1].split("&")[0]
 
-    q = f'site:kensington.com "{sku}"'
-
-    r = requests.get(
-        "https://duckduckgo.com/html/",
-        params={"q": q},
-        headers=HEADERS,
-        timeout=20
-    )
-
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    for a in soup.select("a.result__a"):
-        link = a.get("href")
-        if "/p/" in link:
-            return link
+            if "/p/" in link:
+                return link
 
     return None
 
 
-# ---------------- PRODUCT SCRAPER ----------------
+# ---------------- PRODUCT SCRAPE ----------------
 
 def scrape_product(url):
 
     r = requests.get(url, headers=HEADERS, timeout=30)
 
-    soup = BeautifulSoup(r.text, "html.parser")
+    soup = BeautifulSoup(r.text, "lxml")
 
-    # ---------- FULL HD IMAGES ----------
-
+    # images
     images = []
 
     for img in soup.select("img"):
@@ -81,26 +69,22 @@ def scrape_product(url):
         if src.startswith("//"):
             src = "https:" + src
 
-        if "zoom" in src or "large" in src or "xl" in src:
+        if "zoom" in src or "xl" in src or "large" in src:
             images.append(src)
 
     images = list(set(images))
 
-
-    # ---------- FEATURES ----------
-
+    # features
     features = []
 
     for li in soup.select("ul li"):
 
-        txt = li.get_text(strip=True)
+        t = li.get_text(strip=True)
 
-        if len(txt) > 40:
-            features.append(txt)
+        if len(t) > 40:
+            features.append(t)
 
-
-    # ---------- SPECS ----------
-
+    # specs
     specs = {}
 
     for row in soup.select("table tr"):
@@ -115,14 +99,11 @@ def scrape_product(url):
     return images, features, specs
 
 
-# ---------------- MASTER FUNCTION ----------------
+# ---------------- PROCESS SKU ----------------
 
 def process_sku(sku):
 
-    url = search_bing(sku)
-
-    if not url:
-        url = search_ddg(sku)
+    url = google_search(sku)
 
     if not url:
         return {
@@ -135,6 +116,8 @@ def process_sku(sku):
 
     images, features, specs = scrape_product(url)
 
+    time.sleep(2)
+
     return {
         "SKU": sku,
         "URL": url,
@@ -146,7 +129,7 @@ def process_sku(sku):
 
 # ---------------- UI ----------------
 
-file = st.file_uploader("Excel SKU list", type=["xlsx"])
+file = st.file_uploader("Excel", type=["xlsx"])
 
 if file:
 
@@ -158,7 +141,7 @@ if file:
 
     progress = st.progress(0)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as exe:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as exe:
 
         futures = [exe.submit(process_sku, s) for s in skus]
 
@@ -173,7 +156,7 @@ if file:
     st.dataframe(out)
 
     st.download_button(
-        "Download CSV",
+        "Download",
         out.to_csv(index=False),
-        "kensington_output.csv"
+        "kensington.csv"
     )
