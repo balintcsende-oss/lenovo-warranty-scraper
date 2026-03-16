@@ -1,146 +1,36 @@
-import streamlit as st
-import pandas as pd
 import requests
-from bs4 import BeautifulSoup
-import time
 
+session = requests.Session()
 
-BASE = "https://www.kensington.com"
-SEARCH = "https://www.kensington.com/GlobalSearch/QuickSearch/"
-
-
-HEADERS = {
+headers = {
     "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "X-Requested-With": "XMLHttpRequest",
-    "Referer": "https://www.kensington.com/"
+    "Accept": "*/*",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Referer": "https://www.kensington.com/",
+    "X-Requested-With": "XMLHttpRequest"
 }
 
-COOKIES = {
-    "site": "en-gb"
-}
+# FONTOS: először home page → cookie
+session.get("https://www.kensington.com/", headers=headers)
 
+def get_url(sku):
 
-# ---------- QUICK SEARCH ----------
-def get_product_url(sku):
+    r = session.get(
+        "https://www.kensington.com/GlobalSearch/QuickSearch/",
+        params={"query": sku},
+        headers=headers,
+        timeout=30
+    )
 
-    try:
-        r = requests.get(
-            SEARCH,
-            params={"query": sku},
-            headers=HEADERS,
-            cookies=COOKIES,
-            timeout=30
-        )
+    print(r.text[:500])   # debug
 
-        data = r.json()
+    data = r.json()
 
-        if "Results" in data and len(data["Results"]) > 0:
-            rel = data["Results"][0]["Url"]
-            return BASE + rel
-
-    except:
-        return None
+    if data.get("Results"):
+        return "https://www.kensington.com" + data["Results"][0]["Url"]
 
     return None
 
 
-# ---------- PRODUCT PARSER ----------
-def parse_product(url):
-
-    images = []
-    features = []
-    specs = {}
-
-    try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        # FULL HD képek
-        for img in soup.select("[data-zoom-image]"):
-            src = img.get("data-zoom-image")
-            if src and src not in images:
-                images.append(src)
-
-        # fallback képek
-        if not images:
-            for img in soup.select("img"):
-                src = img.get("src")
-                if src and "kensington" in src:
-                    if src not in images:
-                        images.append(src)
-
-        # FEATURES
-        for li in soup.select("li"):
-            txt = li.get_text(strip=True)
-            if len(txt) > 30:
-                features.append(txt)
-
-        # SPECS
-        for row in soup.select("table tr"):
-            cols = row.find_all(["td", "th"])
-            if len(cols) == 2:
-                key = cols[0].get_text(strip=True)
-                val = cols[1].get_text(strip=True)
-                specs[key] = val
-
-    except:
-        pass
-
-    return images, features, specs
-
-
-# ---------- STREAMLIT ----------
-st.title("Kensington QuickSearch scraper")
-
-file = st.file_uploader("Excel feltöltése", type=["xlsx"])
-
-if file:
-
-    df = pd.read_excel(file)
-
-    if "SKU" not in df.columns:
-        st.error("Nincs SKU oszlop")
-        st.stop()
-
-    results = []
-
-    skus = df["SKU"].dropna().tolist()
-
-    progress = st.progress(0)
-
-    for i, sku in enumerate(skus):
-
-        st.write("Processing:", sku)
-
-        url = get_product_url(str(sku))
-
-        if not url:
-            results.append({"SKU": sku, "URL": None})
-            continue
-
-        images, features, specs = parse_product(url)
-
-        row = {
-            "SKU": sku,
-            "URL": url,
-            "FEATURES": " | ".join(features),
-            "SPECS": str(specs)
-        }
-
-        for n, img in enumerate(images):
-            row[f"IMAGE_{n+1}"] = img
-
-        results.append(row)
-
-        progress.progress((i + 1) / len(skus))
-
-        time.sleep(0.5)
-
-    out = pd.DataFrame(results)
-
-    st.dataframe(out)
-
-    out.to_excel("kensington_output.xlsx", index=False)
-
-    st.success("Kész ✔")
+print(get_url("K50416EU"))
