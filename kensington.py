@@ -26,7 +26,7 @@ def google_search(sku):
         timeout=20
     )
 
-    soup = BeautifulSoup(r.text, "lxml")
+    soup = BeautifulSoup(r.text, "html.parser")
 
     for a in soup.select("a"):
 
