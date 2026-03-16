@@ -1,114 +1,153 @@
 import streamlit as st
 import pandas as pd
-from playwright.sync_api import sync_playwright
+import requests
 from bs4 import BeautifulSoup
 import time
 
 BASE = "https://www.kensington.com"
+SEARCH = "https://www.kensington.com/GlobalSearch/QuickSearch/"
 
-def get_product_data(sku):
-    result = {
-        "url": None,
-        "images": [],
-        "features": [],
-        "specs": {}
-    }
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "Accept-Language": "en-GB,en;q=0.9",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": "https://www.kensington.com/"
+}
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+LOCALES = [
+    "en-gb",
+    "en-us",
+    "de-de",
+    "fr-fr",
+    "hu-hu"
+]
 
-        # ---------- QUICK SEARCH ----------
-        search_url = f"{BASE}/GlobalSearch/QuickSearch/?query={sku}"
-        page.goto(search_url)
-        page.wait_for_timeout(3000)  # 3 sec, hogy a JS render befejeződjön
 
-        # megkeressük az első product URL-t
-        links = page.query_selector_all("a")
-        for a in links:
-            href = a.get_attribute("href")
-            if href and "/p/" in href:
-                result["url"] = BASE + href if href.startswith("/") else href
-                break
+def get_product_url(session, sku):
 
-        if not result["url"]:
-            browser.close()
-            return result
+    for loc in LOCALES:
 
-        # ---------- PRODUCT PAGE ----------
-        page.goto(result["url"])
-        page.wait_for_timeout(3000)
+        try:
+            # locale cookie set
+            session.cookies.set("site", loc)
 
-        html = page.content()
-        soup = BeautifulSoup(html, "html.parser")
+            # warmup request
+            session.get(BASE, headers=BROWSER_HEADERS, timeout=20)
 
-        # ---------- IMAGES ----------
+            r = session.get(
+                SEARCH,
+                params={"query": sku},
+                headers=BROWSER_HEADERS,
+                timeout=20
+            )
+
+            if "application/json" not in r.headers.get("content-type", ""):
+                continue
+
+            data = r.json()
+
+            if data.get("Results"):
+                rel = data["Results"][0]["Url"]
+                return BASE + rel
+
+        except:
+            continue
+
+    return None
+
+
+def parse_product(url):
+
+    images = []
+    features = []
+    specs = {}
+
+    try:
+        r = requests.get(url, headers=BROWSER_HEADERS, timeout=30)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # HD images
         for img in soup.select("[data-zoom-image]"):
             src = img.get("data-zoom-image")
-            if src and src not in result["images"]:
-                result["images"].append(src)
+            if src and src not in images:
+                images.append(src)
 
-        # fallback képek
-        if not result["images"]:
+        # fallback
+        if not images:
             for img in soup.select("img"):
                 src = img.get("src")
-                if src and "kensington" in src and src not in result["images"]:
-                    result["images"].append(src)
+                if src and "kensington" in src:
+                    images.append(src)
 
-        # ---------- FEATURES ----------
+        # features
         for li in soup.select("li"):
-            txt = li.get_text(strip=True)
-            if len(txt) > 30:
-                result["features"].append(txt)
+            t = li.get_text(strip=True)
+            if len(t) > 40:
+                features.append(t)
 
-        # ---------- SPECS ----------
-        for row in soup.select("table tr"):
-            cols = row.find_all(["td", "th"])
+        # specs
+        for tr in soup.select("table tr"):
+            cols = tr.find_all(["td", "th"])
             if len(cols) == 2:
-                key = cols[0].get_text(strip=True)
-                val = cols[1].get_text(strip=True)
-                result["specs"][key] = val
+                specs[cols[0].get_text(strip=True)] = cols[1].get_text(strip=True)
 
-        browser.close()
+    except:
+        pass
 
-    return result
+    return images, features, specs
 
 
-# ---------- STREAMLIT UI ----------
-st.title("Kensington Playwright Scraper")
+st.title("Kensington SKU Scraper")
 
-file = st.file_uploader("Excel feltöltése (SKU oszlop)", type=["xlsx"])
+file = st.file_uploader("Excel feltöltése", type=["xlsx"])
 
 if file:
+
     df = pd.read_excel(file)
 
     if "SKU" not in df.columns:
-        st.error("Nincs SKU oszlop")
+        st.error("SKU oszlop hiányzik")
         st.stop()
+
+    session = requests.Session()
 
     results = []
     skus = df["SKU"].dropna().tolist()
-    progress = st.progress(0)
+
+    prog = st.progress(0)
 
     for i, sku in enumerate(skus):
+
         st.write("Processing:", sku)
-        data = get_product_data(str(sku))
+
+        url = get_product_url(session, str(sku))
+
+        if not url:
+            results.append({"SKU": sku})
+            continue
+
+        images, features, specs = parse_product(url)
 
         row = {
             "SKU": sku,
-            "URL": data["url"],
-            "FEATURES": " | ".join(data["features"]),
-            "SPECS": str(data["specs"])
+            "URL": url,
+            "FEATURES": " | ".join(features),
+            "SPECS": str(specs)
         }
 
-        for n, img in enumerate(data["images"]):
+        for n, img in enumerate(images):
             row[f"IMAGE_{n+1}"] = img
 
         results.append(row)
-        progress.progress((i + 1) / len(skus))
-        time.sleep(0.5)
+
+        prog.progress((i + 1) / len(skus))
+        time.sleep(0.4)
 
     out = pd.DataFrame(results)
+
     st.dataframe(out)
+
     out.to_excel("kensington_output.xlsx", index=False)
+
     st.success("Kész ✔")
