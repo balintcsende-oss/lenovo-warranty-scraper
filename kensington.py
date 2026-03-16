@@ -1,52 +1,117 @@
 import streamlit as st
 import pandas as pd
-from playwright.sync_api import sync_playwright
-import json
+import requests
+from bs4 import BeautifulSoup
+import time
 
-st.title("Kensington QuickSearch Cloudflare bypass DEBUG")
+st.title("Kensington scraper – NO browser")
 
-sku = st.text_input("SKU", "K50416EU")
+# --------- keresés Binggel ---------
 
-if st.button("Lekérés"):
+def find_product_url(sku):
 
-    with sync_playwright() as p:
+    q = f"site:kensington.com {sku}"
 
-        browser = p.chromium.launch(headless=False)   # first run: False!
-        page = browser.new_page()
+    url = "https://www.bing.com/search"
 
-        url = f"https://www.kensington.com/GlobalSearch/QuickSearch/?query={sku}"
+    r = requests.get(
+        url,
+        params={"q": q},
+        headers={"User-Agent": "Mozilla/5.0"}
+    )
 
-        st.write("Opening:", url)
+    soup = BeautifulSoup(r.text, "html.parser")
 
-        page.goto(url, timeout=60000)
+    for a in soup.select("li.b_algo h2 a"):
 
-        # várunk hogy Cloudflare + JS betöltődjön
-        page.wait_for_timeout(8000)
+        link = a.get("href")
 
-        content = page.inner_text("body")
+        if "/p/" in link:
+            return link
 
-        st.subheader("RAW RESPONSE")
-        st.text(content[:2000])
+    return None
 
-        # próbáljuk JSON parse
-        try:
-            data = json.loads(content)
 
-            st.success("JSON parsed")
+# --------- product scrape ---------
 
-            if isinstance(data, dict):
+def scrape_product(url):
 
-                for k, v in data.items():
+    r = requests.get(
+        url,
+        headers={"User-Agent": "Mozilla/5.0"}
+    )
 
-                    if isinstance(v, list):
-                        df = pd.DataFrame(v)
-                        st.subheader(f"LIST: {k}")
-                        st.dataframe(df)
+    soup = BeautifulSoup(r.text, "html.parser")
 
-                    else:
-                        st.write(k, v)
+    # képek
+    images = []
 
-        except:
-            st.error("Nem tiszta JSON → de látod a választ")
+    for img in soup.select("img"):
+        src = img.get("src")
+        if src and "kensington" in src:
+            images.append(src)
 
-        browser.close()
+    # features
+    features = []
+
+    for li in soup.select("ul li"):
+        txt = li.get_text(strip=True)
+        if len(txt) > 20:
+            features.append(txt)
+
+    # specs
+    specs = {}
+
+    for row in soup.select("table tr"):
+        tds = row.find_all("td")
+        if len(tds) == 2:
+            specs[tds[0].get_text(strip=True)] = tds[1].get_text(strip=True)
+
+    return images, features, specs
+
+
+# --------- excel feltöltés ---------
+
+file = st.file_uploader("Excel", type=["xlsx"])
+
+if file:
+
+    df = pd.read_excel(file)
+
+    results = []
+
+    for sku in df["SKU"]:
+
+        st.write("SKU:", sku)
+
+        link = find_product_url(sku)
+
+        if not link:
+            st.error("Nincs URL")
+            continue
+
+        st.success(link)
+
+        images, features, specs = scrape_product(link)
+
+        row = {
+            "SKU": sku,
+            "URL": link,
+            "IMAGES": "\n".join(images),
+            "FEATURES": "\n".join(features),
+            "SPECS": str(specs)
+        }
+
+        results.append(row)
+
+        time.sleep(2)
+
+    out = pd.DataFrame(results)
+
+    st.dataframe(out)
+
+    st.download_button(
+        "Download",
+        out.to_csv(index=False),
+        "kensington.csv"
+    )
