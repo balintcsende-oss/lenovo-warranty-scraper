@@ -3,30 +3,32 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+import time
 
 BASE = "https://www.kensington.com"
-SEARCH = "https://www.kensington.com/GlobalSearch/QuickSearch/"
 
-headers = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json, text/javascript, */*; q=0.01"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 }
 
 
+# ---------- URL KERESÉS ----------
 def get_product_url(sku):
+
     try:
-        r = requests.get(
-            SEARCH,
-            params={"query": sku},
-            headers=headers,
-            timeout=30
-        )
+        search_url = f"https://www.kensington.com/search/?text={sku}"
 
-        data = r.json()
+        r = requests.get(search_url, headers=HEADERS, timeout=30)
 
-        if data and "Results" in data and len(data["Results"]) > 0:
-            rel = data["Results"][0]["Url"]
-            return urljoin(BASE, rel)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        links = soup.select("a")
+
+        for a in links:
+            href = a.get("href")
+
+            if href and "/p/" in href:
+                return urljoin(BASE, href)
 
     except:
         return None
@@ -34,56 +36,70 @@ def get_product_url(sku):
     return None
 
 
+# ---------- PRODUCT SCRAPE ----------
 def parse_product(url):
+
+    images = []
+    features = []
+    specs = {}
+
     try:
-        r = requests.get(url, headers=headers, timeout=30)
+        r = requests.get(url, headers=HEADERS, timeout=30)
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # ---------- IMAGES ----------
-        images = []
-        gallery = soup.select("img")
+        # ---- FULL HD IMAGES ----
+        zoom_imgs = soup.select("[data-zoom-image]")
 
-        for img in gallery:
-            src = img.get("src") or img.get("data-src")
+        for img in zoom_imgs:
+            link = img.get("data-zoom-image")
 
-            if src and "kensington.com" in src:
-                src = src.replace("width=80", "width=1000")
-                src = src.replace("width=200", "width=1200")
+            if link and link not in images:
+                images.append(link)
 
-                if src not in images:
+        # fallback
+        if not images:
+            normal_imgs = soup.select("img")
+
+            for img in normal_imgs:
+                src = img.get("src")
+
+                if src and "kensington" in src and src not in images:
                     images.append(src)
 
-        # ---------- FEATURES ----------
-        features = []
-        feats = soup.select("ul li")
+        # ---- FEATURES ----
+        ul_lists = soup.select("ul")
 
-        for f in feats:
-            txt = f.get_text(strip=True)
-            if len(txt) > 30:
-                features.append(txt)
+        for ul in ul_lists:
+            for li in ul.select("li"):
+                txt = li.get_text(strip=True)
 
-        # ---------- SPECS ----------
-        specs = {}
+                if len(txt) > 25:
+                    features.append(txt)
+
+        # ---- SPECS ----
         rows = soup.select("table tr")
 
-        for r in rows:
-            cols = r.find_all("td")
-            if len(cols) == 2:
-                k = cols[0].get_text(strip=True)
-                v = cols[1].get_text(strip=True)
-                specs[k] = v
+        for row in rows:
+            cols = row.find_all(["td", "th"])
 
-        return images, features, specs
+            if len(cols) == 2:
+                key = cols[0].get_text(strip=True)
+                val = cols[1].get_text(strip=True)
+                specs[key] = val
 
     except:
-        return [], [], {}
+        pass
+
+    return images, features, specs
 
 
+# ---------- STREAMLIT UI ----------
 st.title("Kensington SKU scraper")
 
 file = st.file_uploader("Excel feltöltése", type=["xlsx"])
 
 if file:
+
     df = pd.read_excel(file)
 
     if "SKU" not in df.columns:
@@ -92,7 +108,11 @@ if file:
 
     result = []
 
-    for sku in df["SKU"].dropna():
+    progress = st.progress(0)
+
+    total = len(df)
+
+    for i, sku in enumerate(df["SKU"].dropna()):
 
         st.write("Processing:", sku)
 
@@ -114,10 +134,14 @@ if file:
             "SPECS": str(specs)
         }
 
-        for i, img in enumerate(images):
-            row[f"IMAGE_{i+1}"] = img
+        for idx, img in enumerate(images):
+            row[f"IMAGE_{idx+1}"] = img
 
         result.append(row)
+
+        progress.progress((i+1)/total)
+
+        time.sleep(1)
 
     out = pd.DataFrame(result)
 
@@ -125,4 +149,4 @@ if file:
 
     out.to_excel("kensington_output.xlsx", index=False)
 
-    st.success("Kész")
+    st.success("Kész ✔")
