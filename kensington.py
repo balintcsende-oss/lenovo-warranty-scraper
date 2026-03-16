@@ -2,33 +2,31 @@ import streamlit as st
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+from urllib.parse import quote
 import time
 
-BASE = "https://www.kensington.com"
-
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    "User-Agent": "Mozilla/5.0"
 }
 
 
-# ---------- URL KERESÉS ----------
+# ---------- URL KERESÉS BINGGEL ----------
 def get_product_url(sku):
 
     try:
-        search_url = f"https://www.kensington.com/search/?text={sku}"
+        query = quote(f"site:kensington.com {sku}")
 
-        r = requests.get(search_url, headers=HEADERS, timeout=30)
+        url = f"https://www.bing.com/search?q={query}"
+
+        r = requests.get(url, headers=HEADERS, timeout=30)
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        links = soup.select("a")
+        for a in soup.select("li.b_algo h2 a"):
+            link = a.get("href")
 
-        for a in links:
-            href = a.get("href")
-
-            if href and "/p/" in href:
-                return urljoin(BASE, href)
+            if "/p/" in link:
+                return link
 
     except:
         return None
@@ -36,7 +34,7 @@ def get_product_url(sku):
     return None
 
 
-# ---------- PRODUCT SCRAPE ----------
+# ---------- PRODUCT OLDAL PARSE ----------
 def parse_product(url):
 
     images = []
@@ -45,47 +43,35 @@ def parse_product(url):
 
     try:
         r = requests.get(url, headers=HEADERS, timeout=30)
+
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # ---- FULL HD IMAGES ----
-        zoom_imgs = soup.select("[data-zoom-image]")
-
-        for img in zoom_imgs:
-            link = img.get("data-zoom-image")
-
-            if link and link not in images:
-                images.append(link)
+        # FULL HD képek
+        for img in soup.select("[data-zoom-image]"):
+            src = img.get("data-zoom-image")
+            if src and src not in images:
+                images.append(src)
 
         # fallback
         if not images:
-            normal_imgs = soup.select("img")
-
-            for img in normal_imgs:
+            for img in soup.select("img"):
                 src = img.get("src")
-
                 if src and "kensington" in src and src not in images:
                     images.append(src)
 
-        # ---- FEATURES ----
-        ul_lists = soup.select("ul")
+        # FEATURES
+        for li in soup.select("li"):
+            txt = li.get_text(strip=True)
+            if len(txt) > 30:
+                features.append(txt)
 
-        for ul in ul_lists:
-            for li in ul.select("li"):
-                txt = li.get_text(strip=True)
-
-                if len(txt) > 25:
-                    features.append(txt)
-
-        # ---- SPECS ----
-        rows = soup.select("table tr")
-
-        for row in rows:
+        # SPECS
+        for row in soup.select("table tr"):
             cols = row.find_all(["td", "th"])
-
             if len(cols) == 2:
-                key = cols[0].get_text(strip=True)
-                val = cols[1].get_text(strip=True)
-                specs[key] = val
+                k = cols[0].get_text(strip=True)
+                v = cols[1].get_text(strip=True)
+                specs[k] = v
 
     except:
         pass
@@ -93,22 +79,22 @@ def parse_product(url):
     return images, features, specs
 
 
-# ---------- STREAMLIT UI ----------
-st.title("Kensington SKU scraper")
+# ---------- STREAMLIT ----------
+st.title("Kensington scraper")
 
-file = st.file_uploader("Excel feltöltése", type=["xlsx"])
+file = st.file_uploader("Excel", type=["xlsx"])
 
 if file:
 
     df = pd.read_excel(file)
 
     if "SKU" not in df.columns:
-        st.error("Nincs SKU oszlop")
+        st.error("SKU oszlop nincs")
         st.stop()
 
     result = []
 
-    progress = st.progress(0)
+    prog = st.progress(0)
 
     total = len(df)
 
@@ -119,10 +105,7 @@ if file:
         url = get_product_url(str(sku))
 
         if not url:
-            result.append({
-                "SKU": sku,
-                "URL": None
-            })
+            result.append({"SKU": sku})
             continue
 
         images, features, specs = parse_product(url)
@@ -134,12 +117,12 @@ if file:
             "SPECS": str(specs)
         }
 
-        for idx, img in enumerate(images):
-            row[f"IMAGE_{idx+1}"] = img
+        for n, img in enumerate(images):
+            row[f"IMAGE_{n+1}"] = img
 
         result.append(row)
 
-        progress.progress((i+1)/total)
+        prog.progress((i+1)/total)
 
         time.sleep(1)
 
@@ -149,4 +132,4 @@ if file:
 
     out.to_excel("kensington_output.xlsx", index=False)
 
-    st.success("Kész ✔")
+    st.success("Kész")
