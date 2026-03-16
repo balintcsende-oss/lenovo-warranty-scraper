@@ -4,35 +4,32 @@ import requests
 from bs4 import BeautifulSoup
 import time
 
-st.title("Kensington scraper – NO browser")
+st.title("Kensington scraper – HU search")
 
-# --------- keresés Binggel ---------
+# ---------------- SEARCH ----------------
 
 def find_product_url(sku):
 
-    q = f"site:kensington.com {sku}"
-
-    url = "https://www.bing.com/search"
+    search_url = f"https://www.kensington.com/hu-hu/keres%C3%A9s/?search={sku}"
 
     r = requests.get(
-        url,
-        params={"q": q},
+        search_url,
         headers={"User-Agent": "Mozilla/5.0"}
     )
 
     soup = BeautifulSoup(r.text, "html.parser")
 
-    for a in soup.select("li.b_algo h2 a"):
+    for a in soup.select("a"):
 
-        link = a.get("href")
+        href = a.get("href")
 
-        if "/p/" in link:
-            return link
+        if href and "/p/" in href:
+            return "https://www.kensington.com" + href
 
     return None
 
 
-# --------- product scrape ---------
+# ---------------- PRODUCT ----------------
 
 def scrape_product(url):
 
@@ -43,34 +40,41 @@ def scrape_product(url):
 
     soup = BeautifulSoup(r.text, "html.parser")
 
-    # képek
+    # -------- images --------
+
     images = []
 
     for img in soup.select("img"):
         src = img.get("src")
         if src and "kensington" in src:
+            if src.startswith("//"):
+                src = "https:" + src
             images.append(src)
 
-    # features
+    # -------- features --------
+
     features = []
 
-    for li in soup.select("ul li"):
+    for li in soup.select("li"):
         txt = li.get_text(strip=True)
-        if len(txt) > 20:
+        if len(txt) > 25:
             features.append(txt)
 
-    # specs
+    # -------- specs --------
+
     specs = {}
 
     for row in soup.select("table tr"):
         tds = row.find_all("td")
         if len(tds) == 2:
-            specs[tds[0].get_text(strip=True)] = tds[1].get_text(strip=True)
+            specs[
+                tds[0].get_text(strip=True)
+            ] = tds[1].get_text(strip=True)
 
     return images, features, specs
 
 
-# --------- excel feltöltés ---------
+# ---------------- UI ----------------
 
 file = st.file_uploader("Excel", type=["xlsx"])
 
@@ -82,36 +86,34 @@ if file:
 
     for sku in df["SKU"]:
 
-        st.write("SKU:", sku)
+        st.write("Keresés:", sku)
 
         link = find_product_url(sku)
 
         if not link:
-            st.error("Nincs URL")
+            st.error("Nincs találat")
             continue
 
         st.success(link)
 
         images, features, specs = scrape_product(link)
 
-        row = {
+        results.append({
             "SKU": sku,
             "URL": link,
             "IMAGES": "\n".join(images),
             "FEATURES": "\n".join(features),
             "SPECS": str(specs)
-        }
+        })
 
-        results.append(row)
-
-        time.sleep(2)
+        time.sleep(1)
 
     out = pd.DataFrame(results)
 
     st.dataframe(out)
 
     st.download_button(
-        "Download",
+        "Download CSV",
         out.to_csv(index=False),
         "kensington.csv"
     )
