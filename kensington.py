@@ -1,51 +1,52 @@
 import streamlit as st
 import pandas as pd
-import requests
+from playwright.sync_api import sync_playwright
 import json
 
-st.title("Kensington QuickSearch DEBUG")
+st.title("Kensington QuickSearch Cloudflare bypass DEBUG")
 
 sku = st.text_input("SKU", "K50416EU")
 
 if st.button("Lekérés"):
 
-    url = "https://www.kensington.com/GlobalSearch/QuickSearch/"
+    with sync_playwright() as p:
 
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+        browser = p.chromium.launch(headless=False)   # first run: False!
+        page = browser.new_page()
 
-    r = requests.get(
-        url,
-        params={"query": sku},
-        headers=headers,
-        timeout=30
-    )
+        url = f"https://www.kensington.com/GlobalSearch/QuickSearch/?query={sku}"
 
-    st.write("STATUS:", r.status_code)
-    st.write("CONTENT TYPE:", r.headers.get("content-type"))
+        st.write("Opening:", url)
 
-    # próbáljuk JSON-ként
-    try:
-        data = r.json()
+        page.goto(url, timeout=60000)
 
-        st.success("JSON válasz")
+        # várunk hogy Cloudflare + JS betöltődjön
+        page.wait_for_timeout(8000)
 
-        st.json(data)
+        content = page.inner_text("body")
 
-        # ha van Results
-        if isinstance(data, dict):
-            for k, v in data.items():
+        st.subheader("RAW RESPONSE")
+        st.text(content[:2000])
 
-                if isinstance(v, list):
-                    df = pd.DataFrame(v)
-                    st.subheader(f"Lista: {k}")
-                    st.dataframe(df)
+        # próbáljuk JSON parse
+        try:
+            data = json.loads(content)
 
-                else:
-                    st.write(k, v)
+            st.success("JSON parsed")
 
-    except:
-        st.error("Nem JSON válasz")
+            if isinstance(data, dict):
 
-        st.text(r.text[:5000])
+                for k, v in data.items():
+
+                    if isinstance(v, list):
+                        df = pd.DataFrame(v)
+                        st.subheader(f"LIST: {k}")
+                        st.dataframe(df)
+
+                    else:
+                        st.write(k, v)
+
+        except:
+            st.error("Nem tiszta JSON → de látod a választ")
+
+        browser.close()
