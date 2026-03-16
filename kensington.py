@@ -1,77 +1,76 @@
 import streamlit as st
 import pandas as pd
-from playwright.sync_api import sync_playwright
+import requests
+from bs4 import BeautifulSoup
 import time
 
+ALGOLIA_URL = "https://y5z6c9v1x9-dsn.algolia.net/1/indexes/*/queries"
 
-BASE = "https://www.kensington.com"
+HEADERS = {
+    "x-algolia-application-id": "Y5Z6C9V1X9",
+    "x-algolia-api-key": "0cfdc9c5f9f0cfa_fake_public_search_key",
+    "Content-Type": "application/json"
+}
 
 
-def get_product_data(sku):
+def get_product_url(sku):
 
-    result = {
-        "url": None,
-        "images": [],
-        "features": [],
-        "specs": {}
+    payload = {
+        "requests": [
+            {
+                "indexName": "prod_products_en_us",
+                "params": f"query={sku}&hitsPerPage=5"
+            }
+        ]
     }
 
-    with sync_playwright() as p:
+    try:
+        r = requests.post(ALGOLIA_URL, json=payload, headers=HEADERS, timeout=30)
+        data = r.json()
 
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        hits = data["results"][0]["hits"]
 
-        # ---------- SEARCH ----------
-        search_url = f"{BASE}/search/?text={sku}"
+        if hits:
+            return "https://www.kensington.com" + hits[0]["url"]
 
-        page.goto(search_url, timeout=60000)
-        page.wait_for_timeout(3000)
+    except:
+        return None
 
-        links = page.query_selector_all("a")
+    return None
 
-        for a in links:
-            href = a.get_attribute("href")
-            if href and "/p/" in href:
-                result["url"] = BASE + href if href.startswith("/") else href
-                break
 
-        if not result["url"]:
-            browser.close()
-            return result
+def parse_product(url):
 
-        # ---------- PRODUCT ----------
-        page.goto(result["url"], timeout=60000)
-        page.wait_for_timeout(4000)
+    images = []
+    features = []
+    specs = {}
 
-        # IMAGES
-        imgs = page.query_selector_all("[data-zoom-image]")
-        for i in imgs:
-            src = i.get_attribute("data-zoom-image")
-            if src and src not in result["images"]:
-                result["images"].append(src)
+    try:
+        r = requests.get(url, timeout=30)
+        soup = BeautifulSoup(r.text, "html.parser")
 
-        # FEATURES
-        lis = page.query_selector_all("li")
-        for li in lis:
-            txt = li.inner_text().strip()
-            if len(txt) > 30:
-                result["features"].append(txt)
+        for img in soup.select("[data-zoom-image]"):
+            src = img.get("data-zoom-image")
+            if src:
+                images.append(src)
 
-        # SPECS
-        rows = page.query_selector_all("table tr")
-        for r in rows:
-            cols = r.query_selector_all("td, th")
+        for li in soup.select("li"):
+            t = li.get_text(strip=True)
+            if len(t) > 30:
+                features.append(t)
+
+        for row in soup.select("table tr"):
+            cols = row.find_all(["td","th"])
             if len(cols) == 2:
-                k = cols[0].inner_text().strip()
-                v = cols[1].inner_text().strip()
-                result["specs"][k] = v
+                specs[cols[0].get_text(strip=True)] = cols[1].get_text(strip=True)
 
-        browser.close()
+    except:
+        pass
 
-    return result
+    return images, features, specs
 
 
-st.title("Kensington PRO scraper")
+st.title("Kensington scraper")
 
 file = st.file_uploader("Excel", type=["xlsx"])
 
@@ -79,37 +78,37 @@ if file:
 
     df = pd.read_excel(file)
 
-    if "SKU" not in df.columns:
-        st.error("SKU oszlop hiányzik")
-        st.stop()
-
     results = []
 
     prog = st.progress(0)
-
-    total = len(df)
 
     for i, sku in enumerate(df["SKU"].dropna()):
 
         st.write("Processing:", sku)
 
-        data = get_product_data(str(sku))
+        url = get_product_url(str(sku))
+
+        if not url:
+            results.append({"SKU": sku})
+            continue
+
+        images, features, specs = parse_product(url)
 
         row = {
             "SKU": sku,
-            "URL": data["url"],
-            "FEATURES": " | ".join(data["features"]),
-            "SPECS": str(data["specs"])
+            "URL": url,
+            "FEATURES": " | ".join(features),
+            "SPECS": str(specs)
         }
 
-        for n, img in enumerate(data["images"]):
+        for n, img in enumerate(images):
             row[f"IMAGE_{n+1}"] = img
 
         results.append(row)
 
-        prog.progress((i+1)/total)
+        prog.progress((i+1)/len(df))
 
-        time.sleep(1)
+        time.sleep(0.3)
 
     out = pd.DataFrame(results)
 
@@ -117,4 +116,4 @@ if file:
 
     out.to_excel("kensington_output.xlsx", index=False)
 
-    st.success("Kész ✔")
+    st.success("Kész")
