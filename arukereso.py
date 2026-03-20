@@ -1,105 +1,165 @@
 import streamlit as st
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-import re
-import io
 import time
+import io
 
-st.title("Ár lekérdező - eMAG/Pepita/Allegro/Árukereső")
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+
+st.title("Ár lekérdező (Selenium verzió)")
 
 uploaded_file = st.file_uploader("Excel feltöltése", type="xlsx")
 
-if uploaded_file:
-    xls = pd.ExcelFile(uploaded_file)
-    st.write("Munkalapok a fájlban:", xls.sheet_names)
-    
-    # Első lapot olvassa be
-    df = pd.read_excel(xls, sheet_name=xls.sheet_names[0])
-    st.write("Beolvasott adatok:", df.head())
+# =========================
+# Selenium driver indítása
+# =========================
+def init_driver():
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
 
-    result_rows = []
+    driver = webdriver.Chrome(options=options)
+    return driver
 
-    progress_bar = st.progress(0)
-    total = len(df)
 
-    for idx, row in df.iterrows():
-        url = row.get("Link")
-        vpn = row.get("VPN")
-        sku = row.get("SKU")
+# =========================
+# Scraper függvény
+# =========================
+def scrape_with_selenium(driver, row):
+    url = row.get("Link")
+    vpn = row.get("VPN")
+    sku = row.get("SKU")
 
-        # Üres link átugrás
-        if pd.isna(url) or str(url).strip() == "":
-            result_rows.append([vpn, sku, None, None, None, url])
-            continue
+    if pd.isna(url) or str(url).strip() == "":
+        return [vpn, sku, None, None, None, url]
 
-        headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        driver.get(url)
+        time.sleep(3)  # várunk JS betöltésre
+    except:
+        return [vpn, sku, None, None, None, url]
+
+    product_name = None
+    price = None
+    seller = None
+
+    url_lower = str(url).lower()
+
+    # ================= eMAG =================
+    if "emag" in url_lower:
         try:
-            r = requests.get(url, headers=headers, timeout=10)
-            html = r.text
-            soup = BeautifulSoup(html, "html.parser")
+            product_name = driver.find_element(By.CSS_SELECTOR, "h1").text
         except:
-            result_rows.append([vpn, sku, None, None, None, url])
-            continue
+            pass
 
-        product_name = None
-        # meta tag
-        meta_name = soup.find("meta", {"itemprop":"name"})
-        if meta_name and meta_name.get("content"):
-            product_name = meta_name["content"]
-        elif soup.title:
-            product_name = soup.title.string
+        try:
+            price_text = driver.find_element(By.CSS_SELECTOR, "[data-testid='price']").text
+            price = int("".join(filter(str.isdigit, price_text)))
+        except:
+            pass
 
-        price = None
-        seller = None
+        try:
+            seller = driver.find_element(By.CSS_SELECTOR, "div.fs-14 a").text
+        except:
+            seller = "eMAG"
 
-        url_lower = str(url).lower()
+    # ================= Pepita =================
+    elif "pepita" in url_lower:
+        try:
+            product_name = driver.find_element(By.TAG_NAME, "h1").text
+        except:
+            pass
 
-        # --------------------- eMAG ---------------------
-        if "emag" in url_lower:
-            # Figyelem: eMAG botvédelem miatt a scraping nem mindig működik
-            price = None
-            seller = "iHunt / eMAG (API vagy kézi export szükséges)"
-        
-        # --------------------- Pepita ---------------------
-        elif "pepita" in url_lower:
-            price_tag = soup.select_one(".price, .product-price, .main-price")
-            if price_tag:
-                price_text = "".join(filter(str.isdigit, price_tag.get_text()))
-                price = int(price_text) if price_text else None
-            seller_tag = soup.select_one(".product-distributor a")
-            seller = seller_tag.get_text(strip=True) if seller_tag else "Pepita"
+        try:
+            price_text = driver.find_element(By.CSS_SELECTOR, ".price, .product-price").text
+            price = int("".join(filter(str.isdigit, price_text)))
+        except:
+            pass
 
-        # --------------------- Allegro ---------------------
-        elif "allegro" in url_lower:
-            seller_tag = soup.select_one(".mpof_ki .mp0t_ji")
-            seller = seller_tag.get_text(strip=True) if seller_tag else None
-            price = None  # Allegro ár később bővíthető, mert dinamikus
+        try:
+            seller = driver.find_element(By.CSS_SELECTOR, ".product-distributor a").text
+        except:
+            seller = "Pepita"
 
-        # --------------------- Árkereső ---------------------
-        else:
-            price_tag = soup.select_one('[itemprop="price"]')
-            price = float(price_tag["content"]) if price_tag and price_tag.get("content") else None
-            shop_tag = soup.select_one(".shopname")
-            seller = shop_tag.get_text(strip=True) if shop_tag else None
+    # ================= Allegro =================
+    elif "allegro" in url_lower:
+        try:
+            product_name = driver.find_element(By.TAG_NAME, "h1").text
+        except:
+            pass
 
-        result_rows.append([vpn, sku, product_name, seller, price, url])
+        try:
+            price_text = driver.find_element(By.CSS_SELECTOR, "[data-testid='price']").text
+            price = int("".join(filter(str.isdigit, price_text)))
+        except:
+            pass
 
-        progress_bar.progress((idx+1)/total)
-        time.sleep(0.2)  # kis szünet, hogy ne bombázzuk a szervereket
+        try:
+            seller = driver.find_element(By.CSS_SELECTOR, ".mpof_ki .mp0t_ji").text
+        except:
+            pass
 
-    result_df = pd.DataFrame(result_rows, columns=["VPN","SKU","Terméknév","Bolt","Ár","Link"])
-    st.write("Eredmény:", result_df.head())
+    # ================= Árkereső =================
+    else:
+        try:
+            product_name = driver.find_element(By.TAG_NAME, "h1").text
+        except:
+            pass
 
-    # --------------------- Excel letöltés ---------------------
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        result_df.to_excel(writer, index=False)
-    output.seek(0)
+        try:
+            price_text = driver.find_element(By.CSS_SELECTOR, "[itemprop='price']").get_attribute("content")
+            price = float(price_text)
+        except:
+            pass
 
-    st.download_button(
-        label="Letöltés Excelben",
-        data=output,
-        file_name="output.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        try:
+            seller = driver.find_element(By.CSS_SELECTOR, ".shopname").text
+        except:
+            pass
+
+    return [vpn, sku, product_name, seller, price, url]
+
+
+# =========================
+# FŐ LOGIKA
+# =========================
+if uploaded_file:
+
+    df = pd.read_excel(uploaded_file)
+    st.write("Adatok:", df.head())
+
+    if st.button("Lekérdezés indítása"):
+
+        driver = init_driver()
+
+        results = []
+        progress = st.progress(0)
+
+        for i, row in df.iterrows():
+            results.append(scrape_with_selenium(driver, row))
+            progress.progress((i + 1) / len(df))
+
+        driver.quit()
+
+        result_df = pd.DataFrame(
+            results,
+            columns=["VPN", "SKU", "Terméknév", "Bolt", "Ár", "Link"]
+        )
+
+        st.write("Eredmény:", result_df)
+
+        # Excel export
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            result_df.to_excel(writer, index=False)
+        output.seek(0)
+
+        st.download_button(
+            label="Letöltés Excelben",
+            data=output,
+            file_name="eredmeny.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
