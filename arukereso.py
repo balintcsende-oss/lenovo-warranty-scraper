@@ -2,32 +2,39 @@ import streamlit as st
 import pandas as pd
 import io
 import time
+import subprocess
+import sys
 
-from playwright.sync_api import sync_playwright
+# ===================================================
+# 0️⃣ Playwright telepítés (Cloud kompatibilis)
+# ===================================================
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True)
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    from playwright.sync_api import sync_playwright
 
-st.title("Ár lekérdező (Playwright)")
+st.title("Ár lekérdező (Playwright verzió)")
 
+# ===================================================
+# 1️⃣ Excel feltöltés
+# ===================================================
 uploaded_file = st.file_uploader("Excel feltöltése", type="xlsx")
 
-
-# =========================
-# SCRAPER
-# =========================
 def scrape_page(page, url, vpn, sku):
-
     if pd.isna(url) or str(url).strip() == "":
         return [vpn, sku, None, None, None, url]
 
     try:
-        page.goto(url, timeout=60000)
-        page.wait_for_timeout(3000)  # várunk JS-re
+        page.goto(url, timeout=90000)
+        page.wait_for_timeout(3000)  # várunk a JS betöltésére
     except:
         return [vpn, sku, None, None, None, url]
 
     product_name = None
     price = None
     seller = None
-
     url_lower = str(url).lower()
 
     # ================= eMAG =================
@@ -36,13 +43,11 @@ def scrape_page(page, url, vpn, sku):
             product_name = page.locator("h1").first.inner_text()
         except:
             pass
-
         try:
             price_text = page.locator("[data-testid='price']").first.inner_text()
             price = int("".join(filter(str.isdigit, price_text)))
         except:
-            pass
-
+            price = None
         try:
             seller = page.locator("div.fs-14 a").first.inner_text()
         except:
@@ -54,13 +59,11 @@ def scrape_page(page, url, vpn, sku):
             product_name = page.locator("h1").first.inner_text()
         except:
             pass
-
         try:
             price_text = page.locator(".price, .product-price").first.inner_text()
             price = int("".join(filter(str.isdigit, price_text)))
         except:
-            pass
-
+            price = None
         try:
             seller = page.locator(".product-distributor a").first.inner_text()
         except:
@@ -72,17 +75,15 @@ def scrape_page(page, url, vpn, sku):
             product_name = page.locator("h1").first.inner_text()
         except:
             pass
-
         try:
             price_text = page.locator("[data-testid='price']").first.inner_text()
             price = int("".join(filter(str.isdigit, price_text)))
         except:
-            pass
-
+            price = None
         try:
             seller = page.locator(".mpof_ki .mp0t_ji").first.inner_text()
         except:
-            pass
+            seller = None
 
     # ================= Árkereső =================
     else:
@@ -90,30 +91,27 @@ def scrape_page(page, url, vpn, sku):
             product_name = page.locator("h1").first.inner_text()
         except:
             pass
-
         try:
-            price = float(page.locator("[itemprop='price']").first.get_attribute("content"))
+            price_attr = page.locator("[itemprop='price']").first.get_attribute("content")
+            price = float(price_attr) if price_attr else None
         except:
-            pass
-
+            price = None
         try:
             seller = page.locator(".shopname").first.inner_text()
         except:
-            pass
+            seller = None
 
     return [vpn, sku, product_name, seller, price, url]
 
-
-# =========================
-# MAIN
-# =========================
+# ===================================================
+# 2️⃣ Feldolgozás és Streamlit GUI
+# ===================================================
 if uploaded_file:
-
     xls = pd.ExcelFile(uploaded_file)
     st.write("Munkalapok:", xls.sheet_names)
 
     df = pd.read_excel(xls, sheet_name=xls.sheet_names[0])
-    st.write("Adatok:", df.head())
+    st.write("Beolvasott adatok:", df.head())
 
     if st.button("Lekérdezés indítása"):
 
@@ -121,13 +119,19 @@ if uploaded_file:
         progress = st.progress(0)
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled"
+                ]
+            )
             page = browser.new_page()
 
             for i, row in df.iterrows():
                 result = scrape_page(page, row.get("Link"), row.get("VPN"), row.get("SKU"))
                 results.append(result)
-
                 progress.progress((i + 1) / len(df))
 
             browser.close()
