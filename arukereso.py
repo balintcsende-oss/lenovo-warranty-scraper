@@ -4,16 +4,13 @@ import io
 import requests
 from bs4 import BeautifulSoup
 
-st.title("Ár lekérdező (Cloud kompatibilis, BS4)")
+st.title("Ár lekérdező (Cloud-kompatibilis, minden bolt külön sor)")
 
 uploaded_file = st.file_uploader("Excel feltöltése", type="xlsx")
 
-# ========================
-# FUNKCIÓ: oldalak feldolgozása
-# ========================
 def scrape_page(url, vpn, sku):
     if pd.isna(url) or str(url).strip() == "":
-        return [vpn, sku, None, None, None, url]
+        return []
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
@@ -25,68 +22,80 @@ def scrape_page(url, vpn, sku):
         html = r.text
         soup = BeautifulSoup(html, "html.parser")
     except:
-        return [vpn, sku, None, None, None, url]
+        return []
 
-    product_name = None
-    price = None
-    seller = None
     url_lower = str(url).lower()
+    results = []
 
-    # ================= eMAG =================
+    # ------------------- eMAG -------------------
     if "emag" in url_lower:
-        # terméknév
+        product_name = None
+        price = None
+        seller = "eMAG"
         h1 = soup.find("h1")
         if h1:
             product_name = h1.get_text(strip=True)
-        # ár
-        price_tag = soup.find(attrs={"data-testid": "price"})
-        if price_tag:
-            price_text = price_tag.get_text()
-            price = int("".join(filter(str.isdigit, price_text)))
-        # bolt
         seller_tag = soup.select_one("div.fs-14 a")
-        seller = seller_tag.get_text(strip=True) if seller_tag else "eMAG"
+        if seller_tag:
+            seller = seller_tag.get_text(strip=True)
+        results.append([vpn, sku, product_name, seller, price, url])
 
-    # ================= Pepita =================
+    # ------------------- Pepita -------------------
     elif "pepita" in url_lower:
         h1 = soup.find("h1")
-        if h1:
-            product_name = h1.get_text(strip=True)
+        product_name = h1.get_text(strip=True) if h1 else None
+
         price_tag = soup.select_one(".price, .product-price")
-        if price_tag:
-            price_text = price_tag.get_text()
-            price = int("".join(filter(str.isdigit, price_text)))
+        price = int("".join(filter(str.isdigit, price_tag.get_text()))) if price_tag else None
+
         seller_tag = soup.select_one(".product-distributor a")
         seller = seller_tag.get_text(strip=True) if seller_tag else "Pepita"
 
-    # ================= Allegro =================
+        results.append([vpn, sku, product_name, seller, price, url])
+
+    # ------------------- Allegro -------------------
     elif "allegro" in url_lower:
         h1 = soup.find("h1")
-        if h1:
-            product_name = h1.get_text(strip=True)
+        product_name = h1.get_text(strip=True) if h1 else None
+
         seller_tag = soup.select_one(".mpof_ki .mp0t_ji")
         seller = seller_tag.get_text(strip=True) if seller_tag else None
-        # ár itt csak statikus, JS ár nem lesz
 
-    # ================= Árkereső =================
+        price = None  # JS-sel töltődik, nem érhető el statikus HTML-ből
+        results.append([vpn, sku, product_name, seller, price, url])
+
+    # ------------------- Árkereső -------------------
     else:
+        product_name = None
         h1 = soup.find("h1")
         if h1:
             product_name = h1.get_text(strip=True)
-        price_tag = soup.select_one("[itemprop='price']")
-        if price_tag and price_tag.has_attr("content"):
-            try:
-                price = float(price_tag["content"])
-            except:
-                price = None
-        seller_tag = soup.select_one(".shopname")
-        seller = seller_tag.get_text(strip=True) if seller_tag else None
 
-    return [vpn, sku, product_name, seller, price, url]
+        rows = soup.select(".optoffer")
+        if not rows:
+            # ha nincs optoffer, legalább a fő termékről legyen egy sor
+            results.append([vpn, sku, product_name, None, None, url])
+        else:
+            for row in rows:
+                price_val = None
+                bolt_name = None
 
-# ========================
-# MAIN STREAMLIT
-# ========================
+                price_tag = row.select_one("[itemprop='price']")
+                if price_tag and price_tag.has_attr("content"):
+                    try:
+                        price_val = float(price_tag["content"])
+                    except:
+                        price_val = None
+
+                bolt_tag = row.select_one(".shopname")
+                if bolt_tag:
+                    bolt_name = bolt_tag.get_text(strip=True)
+
+                results.append([vpn, sku, product_name, bolt_name, price_val, url])
+
+    return results
+
+# ======================== MAIN STREAMLIT ========================
 if uploaded_file:
     xls = pd.ExcelFile(uploaded_file)
     st.write("Munkalapok:", xls.sheet_names)
@@ -99,8 +108,8 @@ if uploaded_file:
         progress = st.progress(0)
 
         for i, row in df.iterrows():
-            result = scrape_page(row.get("Link"), row.get("VPN"), row.get("SKU"))
-            results.append(result)
+            rows = scrape_page(row.get("Link"), row.get("VPN"), row.get("SKU"))
+            results.extend(rows)
             progress.progress((i+1)/len(df))
 
         result_df = pd.DataFrame(results, columns=["VPN","SKU","Terméknév","Bolt","Ár","Link"])
