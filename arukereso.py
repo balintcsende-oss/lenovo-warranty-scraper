@@ -2,25 +2,31 @@ import streamlit as st
 import requests
 import pandas as pd
 
-st.title("eMAG Doogee terméklista – API lekérés")
+st.title("eMAG Doogee terméklista – működő API lekérés")
 
 BASE_URL = "https://www.emag.hu/search-by-url"
-PARAMS = {
+
+headers = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json"
+}
+
+params = {
     "source_id": 1,
     "source_type": "brand",
     "brand_id": "doogee",
+    "is_legal_page": 1,
     "page": 1
 }
 
-st.write("Forrás API:", BASE_URL)
-
 all_products = []
 
-for page in range(1, 10):  # max 10 oldalt nézünk át
-    PARAMS["page"] = page
-    r = requests.get(BASE_URL, params=PARAMS, headers={"User-Agent": "Mozilla/5.0"})
+for page in range(1, 20):  # max 20 oldalt nézünk át
+    params["page"] = page
+    r = requests.get(BASE_URL, params=params, headers=headers)
 
     if r.status_code != 200:
+        st.error(f"Hiba a(z) {page}. oldalon: {r.status_code}")
         break
 
     data = r.json()
