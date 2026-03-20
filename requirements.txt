@@ -8,3 +8,4 @@ webdriver-manager
 playwright
 curl_cffi
 demjson3
+cloudscraper
