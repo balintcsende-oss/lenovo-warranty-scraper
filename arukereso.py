@@ -1,50 +1,45 @@
 import streamlit as st
 import requests
-from bs4 import BeautifulSoup
 import pandas as pd
 
-st.title("eMAG Doogee terméklista lekérése")
+st.title("eMAG Doogee terméklista – API lekérés")
 
-URL = "https://www.emag.hu/brands/brand/doogee?ref=bc"
-
-st.write(f"Adatok forrása: {URL}")
-
-headers = {
-    "User-Agent": "Mozilla/5.0"
+BASE_URL = "https://www.emag.hu/search-by-url"
+PARAMS = {
+    "source_id": 1,
+    "source_type": "brand",
+    "brand_id": "doogee",
+    "page": 1
 }
 
-response = requests.get(URL, headers=headers)
+st.write("Forrás API:", BASE_URL)
 
-if response.status_code != 200:
-    st.error("Nem sikerült letölteni az oldalt.")
-else:
-    soup = BeautifulSoup(response.text, "html.parser")
+all_products = []
 
-    products = []
-    cards = soup.find_all("div", class_="card-item")
+for page in range(1, 10):  # max 10 oldalt nézünk át
+    PARAMS["page"] = page
+    r = requests.get(BASE_URL, params=PARAMS, headers={"User-Agent": "Mozilla/5.0"})
 
-    for card in cards:
-        name = card.get("data-product-name")
-        price = card.get("data-product-price")
-        link = card.find("a", class_="card-v2-title")["href"] if card.find("a", class_="card-v2-title") else None
+    if r.status_code != 200:
+        break
 
-        if name and price:
-            products.append({
-                "Terméknév": name,
-                "Ár (Ft)": int(price),
-                "Link": "https://www.emag.hu" + link if link else None
-            })
+    data = r.json()
 
-    df = pd.DataFrame(products)
+    items = data.get("results", {}).get("items", [])
+    if not items:
+        break
 
-    st.subheader("📄 Talált termékek")
-    st.dataframe(df)
+    for item in items:
+        all_products.append({
+            "Terméknév": item.get("name"),
+            "Ár (Ft)": item.get("price"),
+            "Link": item.get("url")
+        })
 
-    # CSV export
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="📥 CSV letöltése",
-        data=csv,
-        file_name="emag_doogee.csv",
-        mime="text/csv"
-    )
+df = pd.DataFrame(all_products)
+
+st.subheader("📄 Talált termékek")
+st.dataframe(df)
+
+csv = df.to_csv(index=False).encode("utf-8")
+st.download_button("📥 CSV letöltése", csv, "emag_doogee.csv", "text/csv")
