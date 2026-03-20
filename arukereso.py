@@ -1,34 +1,29 @@
 import streamlit as st
 import pandas as pd
 import io
-import time
-import subprocess
-import sys
+import requests
+from bs4 import BeautifulSoup
 
-# ===================================================
-# 0️⃣ Playwright telepítés (Cloud kompatibilis)
-# ===================================================
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True)
-    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-    from playwright.sync_api import sync_playwright
+st.title("Ár lekérdező (Cloud kompatibilis, BS4)")
 
-st.title("Ár lekérdező (Playwright verzió)")
-
-# ===================================================
-# 1️⃣ Excel feltöltés
-# ===================================================
 uploaded_file = st.file_uploader("Excel feltöltése", type="xlsx")
 
-def scrape_page(page, url, vpn, sku):
+# ========================
+# FUNKCIÓ: oldalak feldolgozása
+# ========================
+def scrape_page(url, vpn, sku):
     if pd.isna(url) or str(url).strip() == "":
         return [vpn, sku, None, None, None, url]
 
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    }
+
     try:
-        page.goto(url, timeout=90000)
-        page.wait_for_timeout(3000)  # várunk a JS betöltésére
+        r = requests.get(url, headers=headers, timeout=15)
+        r.raise_for_status()
+        html = r.text
+        soup = BeautifulSoup(html, "html.parser")
     except:
         return [vpn, sku, None, None, None, url]
 
@@ -39,73 +34,59 @@ def scrape_page(page, url, vpn, sku):
 
     # ================= eMAG =================
     if "emag" in url_lower:
-        try:
-            product_name = page.locator("h1").first.inner_text()
-        except:
-            pass
-        try:
-            price_text = page.locator("[data-testid='price']").first.inner_text()
+        # terméknév
+        h1 = soup.find("h1")
+        if h1:
+            product_name = h1.get_text(strip=True)
+        # ár
+        price_tag = soup.find(attrs={"data-testid": "price"})
+        if price_tag:
+            price_text = price_tag.get_text()
             price = int("".join(filter(str.isdigit, price_text)))
-        except:
-            price = None
-        try:
-            seller = page.locator("div.fs-14 a").first.inner_text()
-        except:
-            seller = "eMAG"
+        # bolt
+        seller_tag = soup.select_one("div.fs-14 a")
+        seller = seller_tag.get_text(strip=True) if seller_tag else "eMAG"
 
     # ================= Pepita =================
     elif "pepita" in url_lower:
-        try:
-            product_name = page.locator("h1").first.inner_text()
-        except:
-            pass
-        try:
-            price_text = page.locator(".price, .product-price").first.inner_text()
+        h1 = soup.find("h1")
+        if h1:
+            product_name = h1.get_text(strip=True)
+        price_tag = soup.select_one(".price, .product-price")
+        if price_tag:
+            price_text = price_tag.get_text()
             price = int("".join(filter(str.isdigit, price_text)))
-        except:
-            price = None
-        try:
-            seller = page.locator(".product-distributor a").first.inner_text()
-        except:
-            seller = "Pepita"
+        seller_tag = soup.select_one(".product-distributor a")
+        seller = seller_tag.get_text(strip=True) if seller_tag else "Pepita"
 
     # ================= Allegro =================
     elif "allegro" in url_lower:
-        try:
-            product_name = page.locator("h1").first.inner_text()
-        except:
-            pass
-        try:
-            price_text = page.locator("[data-testid='price']").first.inner_text()
-            price = int("".join(filter(str.isdigit, price_text)))
-        except:
-            price = None
-        try:
-            seller = page.locator(".mpof_ki .mp0t_ji").first.inner_text()
-        except:
-            seller = None
+        h1 = soup.find("h1")
+        if h1:
+            product_name = h1.get_text(strip=True)
+        seller_tag = soup.select_one(".mpof_ki .mp0t_ji")
+        seller = seller_tag.get_text(strip=True) if seller_tag else None
+        # ár itt csak statikus, JS ár nem lesz
 
     # ================= Árkereső =================
     else:
-        try:
-            product_name = page.locator("h1").first.inner_text()
-        except:
-            pass
-        try:
-            price_attr = page.locator("[itemprop='price']").first.get_attribute("content")
-            price = float(price_attr) if price_attr else None
-        except:
-            price = None
-        try:
-            seller = page.locator(".shopname").first.inner_text()
-        except:
-            seller = None
+        h1 = soup.find("h1")
+        if h1:
+            product_name = h1.get_text(strip=True)
+        price_tag = soup.select_one("[itemprop='price']")
+        if price_tag and price_tag.has_attr("content"):
+            try:
+                price = float(price_tag["content"])
+            except:
+                price = None
+        seller_tag = soup.select_one(".shopname")
+        seller = seller_tag.get_text(strip=True) if seller_tag else None
 
     return [vpn, sku, product_name, seller, price, url]
 
-# ===================================================
-# 2️⃣ Feldolgozás és Streamlit GUI
-# ===================================================
+# ========================
+# MAIN STREAMLIT
+# ========================
 if uploaded_file:
     xls = pd.ExcelFile(uploaded_file)
     st.write("Munkalapok:", xls.sheet_names)
@@ -114,33 +95,15 @@ if uploaded_file:
     st.write("Beolvasott adatok:", df.head())
 
     if st.button("Lekérdezés indítása"):
-
         results = []
         progress = st.progress(0)
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled"
-                ]
-            )
-            page = browser.new_page()
+        for i, row in df.iterrows():
+            result = scrape_page(row.get("Link"), row.get("VPN"), row.get("SKU"))
+            results.append(result)
+            progress.progress((i+1)/len(df))
 
-            for i, row in df.iterrows():
-                result = scrape_page(page, row.get("Link"), row.get("VPN"), row.get("SKU"))
-                results.append(result)
-                progress.progress((i + 1) / len(df))
-
-            browser.close()
-
-        result_df = pd.DataFrame(
-            results,
-            columns=["VPN","SKU","Terméknév","Bolt","Ár","Link"]
-        )
-
+        result_df = pd.DataFrame(results, columns=["VPN","SKU","Terméknév","Bolt","Ár","Link"])
         st.write("Eredmény:", result_df)
 
         # ================= Excel export =================
