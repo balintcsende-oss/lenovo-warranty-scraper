@@ -1,15 +1,18 @@
 import streamlit as st
-import requests
 import pandas as pd
+import cloudscraper
 
-st.title("eMAG Doogee terméklista – működő API lekérés")
+st.title("eMAG Doogee terméklista – Cloudflare bypass")
+
+scraper = cloudscraper.create_scraper(
+    browser={
+        "browser": "chrome",
+        "platform": "windows",
+        "mobile": False
+    }
+)
 
 BASE_URL = "https://www.emag.hu/search-by-url"
-
-headers = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json"
-}
 
 params = {
     "source_id": 1,
@@ -21,17 +24,18 @@ params = {
 
 all_products = []
 
-for page in range(1, 20):  # max 20 oldalt nézünk át
+for page in range(1, 20):
     params["page"] = page
-    r = requests.get(BASE_URL, params=params, headers=headers)
 
-    if r.status_code != 200:
-        st.error(f"Hiba a(z) {page}. oldalon: {r.status_code}")
+    response = scraper.get(BASE_URL, params=params)
+
+    if response.status_code != 200:
+        st.error(f"Hiba a(z) {page}. oldalon: {response.status_code}")
         break
 
-    data = r.json()
-
+    data = response.json()
     items = data.get("results", {}).get("items", [])
+
     if not items:
         break
 
