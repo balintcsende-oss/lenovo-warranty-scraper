@@ -9,7 +9,7 @@ st.title("Ár lekérdező")
 uploaded_file = st.file_uploader("Excel feltöltése (TableAK fül)", type="xlsx")
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file, sheet_name="TableAK")
+    df = pd.read_excel(uploaded_file, sheet_name="ÁK")
     st.write("Beolvasott adatok:", df.head())
 
     def scrape_row(row):
