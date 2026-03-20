@@ -1,52 +1,53 @@
 import streamlit as st
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from bs4 import BeautifulSoup
 import pandas as pd
-import cloudscraper
+import time
 
-st.title("eMAG Doogee terméklista – Cloudflare bypass")
+st.title("eMAG Doogee terméklista – Selenium lekérés")
 
-scraper = cloudscraper.create_scraper(
-    browser={
-        "browser": "chrome",
-        "platform": "windows",
-        "mobile": False
-    }
-)
+URL = "https://www.emag.hu/brands/brand/doogee?ref=bc"
 
-BASE_URL = "https://www.emag.hu/search-by-url"
+# Selenium beállítások
+options = Options()
+options.add_argument("--headless=new")
+options.add_argument("--no-sandbox")
+options.add_argument("--disable-dev-shm-usage")
+options.add_argument("--disable-gpu")
+options.add_argument("--window-size=1920,1080")
 
-params = {
-    "source_id": 1,
-    "source_type": "brand",
-    "brand_id": "doogee",
-    "is_legal_page": 1,
-    "page": 1
-}
+driver = webdriver.Chrome(options=options)
 
-all_products = []
+st.write("Oldal betöltése…")
+driver.get(URL)
 
-for page in range(1, 20):
-    params["page"] = page
+# Várunk, hogy a JS betöltse a termékeket
+time.sleep(5)
 
-    response = scraper.get(BASE_URL, params=params)
+html = driver.page_source
+driver.quit()
 
-    if response.status_code != 200:
-        st.error(f"Hiba a(z) {page}. oldalon: {response.status_code}")
-        break
+soup = BeautifulSoup(html, "html.parser")
 
-    data = response.json()
-    items = data.get("results", {}).get("items", [])
+products = []
 
-    if not items:
-        break
+cards = soup.find_all("div", class_="card-item")
 
-    for item in items:
-        all_products.append({
-            "Terméknév": item.get("name"),
-            "Ár (Ft)": item.get("price"),
-            "Link": item.get("url")
+for card in cards:
+    name = card.get("data-product-name")
+    price = card.get("data-product-price")
+    link_tag = card.find("a", class_="card-v2-title")
+    link = "https://www.emag.hu" + link_tag["href"] if link_tag else None
+
+    if name and price:
+        products.append({
+            "Terméknév": name,
+            "Ár (Ft)": int(price),
+            "Link": link
         })
 
-df = pd.DataFrame(all_products)
+df = pd.DataFrame(products)
 
 st.subheader("📄 Talált termékek")
 st.dataframe(df)
