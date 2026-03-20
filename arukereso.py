@@ -1,56 +1,42 @@
-import streamlit as st
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
+import asyncio
+from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 import pandas as pd
-import time
 
-st.title("eMAG Doogee terméklista – Selenium lekérés")
+async def scrape_emag():
+    url = "https://www.emag.hu/brands/brand/doogee?ref=bc"
 
-URL = "https://www.emag.hu/brands/brand/doogee?ref=bc"
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False)  # fontos!
+        context = await browser.new_context()
 
-# Selenium beállítások
-options = Options()
-options.add_argument("--headless=new")
-options.add_argument("--no-sandbox")
-options.add_argument("--disable-dev-shm-usage")
-options.add_argument("--disable-gpu")
-options.add_argument("--window-size=1920,1080")
+        page = await context.new_page()
+        await page.goto(url, timeout=60000)
 
-driver = webdriver.Chrome(options=options)
+        # Várunk, hogy a JS betöltse a termékeket
+        await page.wait_for_selector(".card-item", timeout=60000)
 
-st.write("Oldal betöltése…")
-driver.get(URL)
+        html = await page.content()
+        await browser.close()
 
-# Várunk, hogy a JS betöltse a termékeket
-time.sleep(5)
+        soup = BeautifulSoup(html, "html.parser")
+        cards = soup.find_all("div", class_="card-item")
 
-html = driver.page_source
-driver.quit()
+        products = []
+        for card in cards:
+            name = card.get("data-product-name")
+            price = card.get("data-product-price")
+            link_tag = card.find("a", class_="card-v2-title")
+            link = "https://www.emag.hu" + link_tag["href"] if link_tag else None
 
-soup = BeautifulSoup(html, "html.parser")
+            if name and price:
+                products.append({
+                    "Terméknév": name,
+                    "Ár (Ft)": int(price),
+                    "Link": link
+                })
 
-products = []
+        return pd.DataFrame(products)
 
-cards = soup.find_all("div", class_="card-item")
-
-for card in cards:
-    name = card.get("data-product-name")
-    price = card.get("data-product-price")
-    link_tag = card.find("a", class_="card-v2-title")
-    link = "https://www.emag.hu" + link_tag["href"] if link_tag else None
-
-    if name and price:
-        products.append({
-            "Terméknév": name,
-            "Ár (Ft)": int(price),
-            "Link": link
-        })
-
-df = pd.DataFrame(products)
-
-st.subheader("📄 Talált termékek")
-st.dataframe(df)
-
-csv = df.to_csv(index=False).encode("utf-8")
-st.download_button("📥 CSV letöltése", csv, "emag_doogee.csv", "text/csv")
+df = asyncio.run(scrape_emag())
+print(df)
