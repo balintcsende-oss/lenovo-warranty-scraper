@@ -4,26 +4,26 @@ import requests
 from io import BytesIO
 from openpyxl import load_workbook
 
-st.title("HP OID lekérő + link generátor + 300 DPI PNG képek")
+st.title("HP OID + PNG 300 DPI Image Extractor")
 
 uploaded_file = st.file_uploader(
-    "Töltsd fel az Excel fájlt (A oszlopban a cikkszámok)",
+    "Töltsd fel az Excel fájlt (A oszlop: cikkszámok)",
     type=["xlsx"]
 )
 
 if uploaded_file:
 
-    # ===== Excel beolvasás =====
+    # ===== beolvasás =====
     df = pd.read_excel(uploaded_file)
 
-    # ===== Új oszlopok =====
+    # ===== alap oszlopok =====
     df["OID"] = ""
     df["LINK"] = ""
     df["OPEN PRODUCT LINK"] = ""
     df["IMAGE LINK"] = ""
     df["OPEN IMAGE LINK"] = ""
 
-    # ===== API endpointok =====
+    # ===== API-k =====
     base_api = "https://pcb.inc.hp.com/api/catalogs/hu-hu/nodes/search/autocomplete"
 
     image_api_template = (
@@ -31,7 +31,6 @@ if uploaded_file:
         "?status[]=L&status[]=O"
     )
 
-    # ===== Link template-ek =====
     product_link_template = (
         "https://pcb.inc.hp.com/webapp/#/hu-hu/{}/T"
         "?hierarchy=F&status=L&status=O"
@@ -42,33 +41,27 @@ if uploaded_file:
         "?hierarchy=F&status=L&status=O"
     )
 
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     progress = st.progress(0)
     total_rows = len(df)
 
-    # ===== Feldolgozás =====
+    # ===== fő loop =====
     for i, row in df.iterrows():
 
-        # első oszlop értéke
         prodnum = str(row.iloc[0]).strip()
 
-        # üres sorok kihagyása
         if prodnum == "" or prodnum.lower() == "nan":
             continue
-
-        params = {
-            "query": prodnum,
-            "status[]": ["L", "O"],
-            "exactSearch": "false"
-        }
 
         try:
             response = requests.get(
                 base_api,
-                params=params,
+                params={
+                    "query": prodnum,
+                    "status[]": ["L", "O"],
+                    "exactSearch": "false"
+                },
                 headers=headers,
                 timeout=10
             )
@@ -89,9 +82,8 @@ if uploaded_file:
                     df.at[i, "LINK"] = product_link
                     df.at[i, "IMAGE LINK"] = image_link
 
-                    # ===== Képek lekérése =====
+                    # ===== IMAGE API =====
                     try:
-
                         img_response = requests.get(
                             image_api_template.format(oid),
                             headers=headers,
@@ -104,27 +96,27 @@ if uploaded_file:
 
                             pic_index = 1
 
-                            # FIGYELEM: contents lista
                             for item in img_data.get("contents", []):
 
-    dpi = item.get("dpiResolution")
-    doc_type = item.get("documentTypeDetail")
-    image_url = item.get("imageUrlHttps")
+                                dpi = item.get("dpiResolution")
+                                doc_type = item.get("documentTypeDetail")
+                                image_url = item.get("imageUrlHttps")
 
-    if (
-        dpi is not None
-        and "300" in str(dpi)
-        and doc_type is not None
-        and (
-            "product image" in str(doc_type).lower()
-            or "product image hero" in str(doc_type).lower()
-        )
-        and image_url
-        and image_url.lower().endswith(".png")
-    ):
-        col_name = f"PIC LINK {pic_index}"
-        df.at[i, col_name] = image_url
-        pic_index += 1
+                                # ===== SZŰRÉS =====
+                                if (
+                                    dpi is not None
+                                    and "300" in str(dpi)
+                                    and doc_type is not None
+                                    and (
+                                        "product image" in str(doc_type).lower()
+                                        or "product image hero" in str(doc_type).lower()
+                                    )
+                                    and image_url
+                                    and image_url.lower().endswith(".png")
+                                ):
+                                    col_name = f"PIC LINK {pic_index}"
+                                    df.at[i, col_name] = image_url
+                                    pic_index += 1
 
                     except Exception:
                         pass
@@ -145,43 +137,35 @@ if uploaded_file:
 
     # ===== Excel export =====
     output = BytesIO()
-
     df.to_excel(output, index=False)
-
     output.seek(0)
 
-    # ===== openpyxl betöltés =====
     wb = load_workbook(output)
     ws = wb.active
 
-    # ===== Hyperlinkek =====
+    # ===== hyperlinkek (NEM módosítva) =====
     for row_num in range(2, len(df) + 2):
 
         product_link = ws[f"C{row_num}"].value
         image_link = ws[f"E{row_num}"].value
 
-        # ===== Product OPEN =====
         if product_link:
             ws[f"D{row_num}"].value = "OPEN"
             ws[f"D{row_num}"].hyperlink = product_link
             ws[f"D{row_num}"].style = "Hyperlink"
 
-        # ===== Image OPEN =====
         if image_link:
             ws[f"F{row_num}"].value = "OPEN"
             ws[f"F{row_num}"].hyperlink = image_link
             ws[f"F{row_num}"].style = "Hyperlink"
 
-    # ===== Mentés =====
     final_output = BytesIO()
-
     wb.save(final_output)
-
     final_output.seek(0)
 
     st.download_button(
         label="Excel letöltése",
         data=final_output,
-        file_name="output_with_links_and_images.xlsx",
+        file_name="hp_oid_images_output.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
