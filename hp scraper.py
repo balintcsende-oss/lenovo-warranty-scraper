@@ -107,23 +107,24 @@ if uploaded_file:
                             # FIGYELEM: contents lista
                             for item in img_data.get("contents", []):
 
-                                dpi = item.get("dpiResolution")
-                                doc_type = item.get("documentTypeDetail")
-                                image_url = item.get("imageUrlHttps")
+    dpi = item.get("dpiResolution")
+    doc_type = item.get("documentTypeDetail")
+    image_url = item.get("imageUrlHttps")
 
-                                # ===== Szűrés =====
-                                if (
-                                    str(dpi).startswith("300")
-                                    and doc_type == "product image"
-                                    and image_url
-                                    and image_url.lower().endswith(".png")
-                                ):
-
-                                    col_name = f"PIC LINK {pic_index}"
-
-                                    df.at[i, col_name] = image_url
-
-                                    pic_index += 1
+    if (
+        dpi is not None
+        and "300" in str(dpi)
+        and doc_type is not None
+        and (
+            "product image" in str(doc_type).lower()
+            or "product image hero" in str(doc_type).lower()
+        )
+        and image_url
+        and image_url.lower().endswith(".png")
+    ):
+        col_name = f"PIC LINK {pic_index}"
+        df.at[i, col_name] = image_url
+        pic_index += 1
 
                     except Exception:
                         pass
