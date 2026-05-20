@@ -33,7 +33,7 @@ if uploaded_file:
     total_rows = len(df)
 
     for i, row in df.iterrows():
-        prodnum = row[0]
+        prodnum = row.iloc[0]
 
         if pd.isna(prodnum):
             continue
