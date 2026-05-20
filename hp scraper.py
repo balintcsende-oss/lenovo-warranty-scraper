@@ -85,7 +85,7 @@ if uploaded_file:
                     product_link = product_link_template.format(oid)
                     image_link = image_link_template.format(oid)
 
-                    df.at[i, "OID"] = oid
+                    df.at[i, "OID"] = str(oid)
                     df.at[i, "LINK"] = product_link
                     df.at[i, "IMAGE LINK"] = image_link
 
