@@ -20,7 +20,7 @@ HEADERS = {
 # ---------------------------------------------------
 def search_product_url(sku):
 
-    search_url = f"https://www.arukereso.hu/?st={quote(str(sku))}"
+    search_url = f"https://www.arukereso.hu/CategorySearch.php?st={quote(str(sku))}"
 
     try:
         r = requests.get(search_url, headers=HEADERS, timeout=30)
