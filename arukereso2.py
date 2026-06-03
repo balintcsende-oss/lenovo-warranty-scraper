@@ -1,208 +1,284 @@
-import streamlit as st
+import io
+import time
 import pandas as pd
 import requests
+import streamlit as st
+
 from bs4 import BeautifulSoup
-from urllib.parse import quote
-import re
-import time
+
+# --------------------------------------------------
+# CONFIG
+# --------------------------------------------------
 
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0 Safari/537.36"
-    )
+    ),
+    "Accept-Language": "hu-HU,hu;q=0.9,en;q=0.8"
 }
 
 
-# ---------------------------------------------------
-# SKU keresés
-# ---------------------------------------------------
+# --------------------------------------------------
+# SKU -> PRODUCT URL
+# --------------------------------------------------
+
 def search_product_url(sku):
 
-    search_url = f"https://www.arukereso.hu/CategorySearch.php?st={quote(str(sku))}"
-
     try:
-        r = requests.get(search_url, headers=HEADERS, timeout=30)
+        search_url = f"https://www.arukereso.hu/CategorySearch.php?st={sku}"
+
+        r = requests.get(
+            search_url,
+            headers=HEADERS,
+            timeout=30
+        )
+
+        if r.status_code != 200:
+            return None
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        links = soup.find_all("a", href=True)
+        sku_lower = str(sku).lower()
 
-        for a in links:
+        for a in soup.find_all("a", href=True):
 
             href = a["href"]
+            title = a.get("title", "")
 
-            # termékoldal szűrés
-            if "/p" in href or href.endswith("/"):
-
-                if href.startswith("/"):
-                    href = "https://www.arukereso.hu" + href
-
+            if (
+                sku_lower in title.lower()
+                and "arukereso.hu" in href
+                and "-p" in href
+            ):
                 return href
 
-    except Exception as e:
-        st.error(f"Keresési hiba: {sku} -> {e}")
+        return None
 
-    return None
+    except Exception:
+        return None
 
 
-# ---------------------------------------------------
-# Ár scraping
-# ---------------------------------------------------
-def scrape_prices(product_url):
+# --------------------------------------------------
+# PRODUCT PAGE -> OFFERS
+# --------------------------------------------------
+
+def get_prices(product_url):
 
     results = []
 
     try:
-        r = requests.get(product_url, headers=HEADERS, timeout=30)
+
+        r = requests.get(
+            product_url,
+            headers=HEADERS,
+            timeout=30
+        )
+
+        if r.status_code != 200:
+            return results
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        text = soup.get_text("\n")
+        offers = soup.select("div.optoffer")
 
-        # boltok keresése
-        offers = soup.find_all(["div", "tr", "li"])
+        for offer in offers:
 
-        for item in offers:
+            try:
 
-            row_text = item.get_text(" ", strip=True)
+                shop_el = offer.select_one(
+                    '[itemprop="seller"] [itemprop="name"]'
+                )
 
-            # ár regex
-            price_match = re.search(r"([\d\s]+Ft)", row_text)
+                price_el = offer.select_one(
+                    '[itemprop="price"]'
+                )
 
-            if price_match:
+                if not shop_el:
+                    continue
 
-                price = price_match.group(1)
+                if not price_el:
+                    continue
 
-                # bolt név próbálása
-                shop = None
+                shop = shop_el.get_text(strip=True)
 
-                links = item.find_all("a")
+                price = price_el.get(
+                    "content",
+                    ""
+                )
 
-                for l in links:
-                    txt = l.get_text(strip=True)
+                results.append(
+                    {
+                        "shop": shop,
+                        "price": price
+                    }
+                )
 
-                    if len(txt) > 2 and "Ft" not in txt:
-                        shop = txt
-                        break
+            except Exception:
+                pass
 
-                results.append({
-                    "shop": shop,
-                    "price": price
-                })
+        return results
 
-        # duplikáció törlés
-        unique = []
-        seen = set()
-
-        for r in results:
-
-            key = (r["shop"], r["price"])
-
-            if key not in seen:
-                seen.add(key)
-                unique.append(r)
-
-        return unique
-
-    except Exception as e:
-        st.error(f"Scrape hiba: {e}")
-
-    return []
+    except Exception:
+        return results
 
 
-# ---------------------------------------------------
-# STREAMLIT
-# ---------------------------------------------------
-st.set_page_config(page_title="Árukereső scraper", layout="wide")
+# --------------------------------------------------
+# EXCEL EXPORT
+# --------------------------------------------------
 
-st.title("Árukereső SKU scraper")
+def dataframe_to_excel(df):
+
+    output = io.BytesIO()
+
+    with pd.ExcelWriter(
+        output,
+        engine="xlsxwriter"
+    ) as writer:
+
+        df.to_excel(
+            writer,
+            sheet_name="Arukereso",
+            index=False
+        )
+
+    output.seek(0)
+
+    return output
+
+
+# --------------------------------------------------
+# STREAMLIT UI
+# --------------------------------------------------
+
+st.set_page_config(
+    page_title="Árukereső SKU árlekérő",
+    layout="wide"
+)
+
+st.title("Árukereső SKU árlekérő")
+
+st.write(
+    """
+Tölts fel egy Excel vagy CSV fájlt.
+
+Kötelező oszlop:
+
+- sku
+"""
+)
 
 uploaded_file = st.file_uploader(
-    "CSV vagy XLSX feltöltés",
-    type=["csv", "xlsx"]
+    "Excel vagy CSV",
+    type=["xlsx", "xls", "csv"]
 )
 
 if uploaded_file:
 
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+    try:
 
-    st.dataframe(df.head())
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
 
-    if "sku" not in df.columns:
-        st.error("Nincs sku oszlop!")
-        st.stop()
+        st.subheader("Beolvasott adatok")
+        st.dataframe(df.head())
 
-    if st.button("Indítás"):
+        if "sku" not in df.columns:
 
-        output = []
+            st.error(
+                "Nem található sku oszlop!"
+            )
 
-        progress = st.progress(0)
+            st.stop()
 
-        total = len(df)
+        if st.button("Lekérdezés indítása"):
 
-        for idx, row in df.iterrows():
+            all_rows = []
 
-            sku = str(row["sku"])
+            progress = st.progress(0)
 
-            st.write(f"SKU: {sku}")
+            total = len(df)
 
-            product_url = search_product_url(sku)
+            for idx, row in df.iterrows():
 
-            st.write(f"Talált URL: {product_url}")
+                sku = str(row["sku"]).strip()
 
-            if product_url:
+                product_url = search_product_url(sku)
 
-                prices = scrape_prices(product_url)
+                if not product_url:
 
-                if prices:
-
-                    for p in prices:
-
-                        output.append({
+                    all_rows.append(
+                        {
                             "sku": sku,
-                            "url": product_url,
-                            "shop": p["shop"],
-                            "price": p["price"]
-                        })
+                            "product_url": None,
+                            "shop": None,
+                            "price": None
+                        }
+                    )
+
+                    progress.progress(
+                        (idx + 1) / total
+                    )
+
+                    continue
+
+                offers = get_prices(product_url)
+
+                if not offers:
+
+                    all_rows.append(
+                        {
+                            "sku": sku,
+                            "product_url": product_url,
+                            "shop": None,
+                            "price": None
+                        }
+                    )
 
                 else:
 
-                    output.append({
-                        "sku": sku,
-                        "url": product_url,
-                        "shop": None,
-                        "price": None
-                    })
+                    for offer in offers:
 
-            else:
+                        all_rows.append(
+                            {
+                                "sku": sku,
+                                "product_url": product_url,
+                                "shop": offer["shop"],
+                                "price": offer["price"]
+                            }
+                        )
 
-                output.append({
-                    "sku": sku,
-                    "url": None,
-                    "shop": None,
-                    "price": None
-                })
+                time.sleep(1)
 
-            progress.progress((idx + 1) / total)
+                progress.progress(
+                    (idx + 1) / total
+                )
 
-            time.sleep(1)
+            result_df = pd.DataFrame(all_rows)
 
-        result_df = pd.DataFrame(output)
+            st.success(
+                f"Kész! {len(result_df)} sor."
+            )
 
-        st.success("Kész")
+            st.dataframe(result_df)
 
-        st.dataframe(result_df)
+            excel_file = dataframe_to_excel(
+                result_df
+            )
 
-        csv = result_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="Excel letöltése",
+                data=excel_file,
+                file_name="arukereso_arak.xlsx",
+                mime=(
+                    "application/vnd.openxmlformats-"
+                    "officedocument.spreadsheetml.sheet"
+                )
+            )
 
-        st.download_button(
-            "CSV letöltése",
-            csv,
-            "arukereso_export.csv",
-            "text/csv"
-        )
+    except Exception as e:
+
+        st.exception(e)
