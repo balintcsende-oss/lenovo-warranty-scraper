@@ -21,43 +21,78 @@ HEADERS = {
 
 
 # --------------------------------------------------
+# SAFE REQUEST (ANTI-BLOCK DETECTION)
+# --------------------------------------------------
+
+def safe_get(url):
+    """
+    Returns: (status, text, blocked_reason)
+
+    status: HTTP status code or None
+    blocked_reason: None if OK, otherwise string
+    """
+
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=30)
+
+        text_lower = r.text.lower()
+
+        # HTTP alapú védelem
+        if r.status_code in [403, 429]:
+            return r.status_code, None, f"HTTP blokkolás ({r.status_code})"
+
+        # HTML alapú bot/captcha detektálás
+        block_signals = [
+            "captcha",
+            "robot",
+            "access denied",
+            "unusual traffic",
+            "verify you are human",
+            "too many requests"
+        ]
+
+        if any(sig in text_lower for sig in block_signals):
+            return r.status_code, None, "Bot védelem / CAPTCHA oldal"
+
+        if r.status_code != 200:
+            return r.status_code, None, f"HTTP hiba ({r.status_code})"
+
+        return r.status_code, r.text, None
+
+    except Exception as e:
+        return None, None, f"Hálózati hiba: {str(e)}"
+
+
+# --------------------------------------------------
 # SKU -> PRODUCT URL
 # --------------------------------------------------
 
 def search_product_url(sku):
 
-    try:
-        search_url = f"https://www.arukereso.hu/CategorySearch.php?st={sku}"
+    search_url = f"https://www.arukereso.hu/CategorySearch.php?st={sku}"
 
-        r = requests.get(
-            search_url,
-            headers=HEADERS,
-            timeout=30
-        )
+    status, html, blocked = safe_get(search_url)
 
-        if r.status_code != 200:
-            return None
+    if blocked or not html:
+        return None, blocked
 
-        soup = BeautifulSoup(r.text, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
 
-        sku_lower = str(sku).lower()
+    sku_lower = str(sku).lower()
 
-        for a in soup.find_all("a", href=True):
+    for a in soup.find_all("a", href=True):
 
-            href = a["href"]
-            title = a.get("title", "")
+        href = a["href"]
+        title = a.get("title", "")
 
-            if (
-                sku_lower in title.lower()
-                and "arukereso.hu" in href
-                and "-p" in href
-            ):
-                return href
+        if (
+            sku_lower in title.lower()
+            and "arukereso.hu" in href
+            and "-p" in href
+        ):
+            return href, None
 
-        return None
-
-    except Exception:
-        return None
+    return None, None
 
 
 # --------------------------------------------------
@@ -68,60 +103,33 @@ def get_prices(product_url):
 
     results = []
 
-    try:
+    status, html, blocked = safe_get(product_url)
 
-        r = requests.get(
-            product_url,
-            headers=HEADERS,
-            timeout=30
-        )
+    if blocked or not html:
+        return results, blocked
 
-        if r.status_code != 200:
-            return results
+    soup = BeautifulSoup(html, "html.parser")
 
-        soup = BeautifulSoup(r.text, "html.parser")
+    offers = soup.select("div.optoffer")
 
-        offers = soup.select("div.optoffer")
+    for offer in offers:
 
-        for offer in offers:
+        try:
+            shop_el = offer.select_one('[itemprop="seller"] [itemprop="name"]')
+            price_el = offer.select_one('[itemprop="price"]')
 
-            try:
+            if not shop_el or not price_el:
+                continue
 
-                shop_el = offer.select_one(
-                    '[itemprop="seller"] [itemprop="name"]'
-                )
+            results.append({
+                "shop": shop_el.get_text(strip=True),
+                "price": price_el.get("content", "")
+            })
 
-                price_el = offer.select_one(
-                    '[itemprop="price"]'
-                )
+        except Exception:
+            pass
 
-                if not shop_el:
-                    continue
-
-                if not price_el:
-                    continue
-
-                shop = shop_el.get_text(strip=True)
-
-                price = price_el.get(
-                    "content",
-                    ""
-                )
-
-                results.append(
-                    {
-                        "shop": shop,
-                        "price": price
-                    }
-                )
-
-            except Exception:
-                pass
-
-        return results
-
-    except Exception:
-        return results
+    return results, None
 
 
 # --------------------------------------------------
@@ -132,19 +140,10 @@ def dataframe_to_excel(df):
 
     output = io.BytesIO()
 
-    with pd.ExcelWriter(
-        output,
-        engine="xlsxwriter"
-    ) as writer:
-
-        df.to_excel(
-            writer,
-            sheet_name="Arukereso",
-            index=False
-        )
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, sheet_name="Arukereso", index=False)
 
     output.seek(0)
-
     return output
 
 
@@ -159,15 +158,7 @@ st.set_page_config(
 
 st.title("Árukereső SKU árlekérő")
 
-st.write(
-    """
-Tölts fel egy Excel vagy CSV fájlt.
-
-Kötelező oszlop:
-
-- sku
-"""
-)
+st.write("Tölts fel egy Excel vagy CSV fájlt. Kötelező oszlop: sku")
 
 uploaded_file = st.file_uploader(
     "Excel vagy CSV",
@@ -187,98 +178,76 @@ if uploaded_file:
         st.dataframe(df.head())
 
         if "sku" not in df.columns:
-
-            st.error(
-                "Nem található sku oszlop!"
-            )
-
+            st.error("Nem található sku oszlop!")
             st.stop()
 
         if st.button("Lekérdezés indítása"):
 
             all_rows = []
-
             progress = st.progress(0)
-
             total = len(df)
 
             for idx, row in df.iterrows():
 
                 sku = str(row["sku"]).strip()
 
-                product_url = search_product_url(sku)
+                product_url, block_reason = search_product_url(sku)
+
+                if block_reason:
+                    st.warning(f"⚠️ Védelem detektálva SKU: {sku} -> {block_reason}")
 
                 if not product_url:
+                    all_rows.append({
+                        "sku": sku,
+                        "product_url": None,
+                        "shop": None,
+                        "price": None,
+                        "blocked": block_reason
+                    })
 
-                    all_rows.append(
-                        {
-                            "sku": sku,
-                            "product_url": None,
-                            "shop": None,
-                            "price": None
-                        }
-                    )
-
-                    progress.progress(
-                        (idx + 1) / total
-                    )
-
+                    progress.progress((idx + 1) / total)
                     continue
 
-                offers = get_prices(product_url)
+                offers, block_reason = get_prices(product_url)
+
+                if block_reason:
+                    st.warning(f"⚠️ Védelem a termékoldalon: {sku} -> {block_reason}")
 
                 if not offers:
-
-                    all_rows.append(
-                        {
+                    all_rows.append({
+                        "sku": sku,
+                        "product_url": product_url,
+                        "shop": None,
+                        "price": None,
+                        "blocked": block_reason
+                    })
+                else:
+                    for offer in offers:
+                        all_rows.append({
                             "sku": sku,
                             "product_url": product_url,
-                            "shop": None,
-                            "price": None
-                        }
-                    )
-
-                else:
-
-                    for offer in offers:
-
-                        all_rows.append(
-                            {
-                                "sku": sku,
-                                "product_url": product_url,
-                                "shop": offer["shop"],
-                                "price": offer["price"]
-                            }
-                        )
+                            "shop": offer["shop"],
+                            "price": offer["price"],
+                            "blocked": None
+                        })
 
                 time.sleep(1)
-
-                progress.progress(
-                    (idx + 1) / total
-                )
+                progress.progress((idx + 1) / total)
 
             result_df = pd.DataFrame(all_rows)
 
-            st.success(
-                f"Kész! {len(result_df)} sor."
-            )
+            st.success(f"Kész! {len(result_df)} sor.")
 
             st.dataframe(result_df)
 
-            excel_file = dataframe_to_excel(
-                result_df
-            )
+            excel_file = dataframe_to_excel(result_df)
 
             st.download_button(
                 label="Excel letöltése",
                 data=excel_file,
                 file_name="arukereso_arak.xlsx",
-                mime=(
-                    "application/vnd.openxmlformats-"
-                    "officedocument.spreadsheetml.sheet"
-                )
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
     except Exception as e:
-
         st.exception(e)
