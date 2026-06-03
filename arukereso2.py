@@ -1,14 +1,18 @@
 import io
 import time
+import random
 import pandas as pd
 import requests
 import streamlit as st
 
 from bs4 import BeautifulSoup
+from urllib.parse import quote
 
 # --------------------------------------------------
-# CONFIG
+# SESSION + HEADERS
 # --------------------------------------------------
+
+session = requests.Session()
 
 HEADERS = {
     "User-Agent": (
@@ -16,51 +20,56 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0 Safari/537.36"
     ),
-    "Accept-Language": "hu-HU,hu;q=0.9,en;q=0.8"
+    "Accept-Language": "hu-HU,hu;q=0.9,en;q=0.8",
+    "Referer": "https://www.arukereso.hu/"
 }
 
+session.headers.update(HEADERS)
+
 
 # --------------------------------------------------
-# SAFE REQUEST (ANTI-BLOCK DETECTION)
+# SAFE GET (403 + CAPTCHA DETECTION + RETRY)
 # --------------------------------------------------
 
-def safe_get(url):
-    """
-    Returns: (status, text, blocked_reason)
+def safe_get(url, retries=3):
 
-    status: HTTP status code or None
-    blocked_reason: None if OK, otherwise string
-    """
+    for i in range(retries):
 
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=30)
+        try:
+            r = session.get(url, timeout=30)
+            text = r.text.lower()
 
-        text_lower = r.text.lower()
+            # HTTP block
+            if r.status_code == 403:
+                time.sleep(2 * (i + 1))
+                continue
 
-        # HTTP alapú védelem
-        if r.status_code in [403, 429]:
-            return r.status_code, None, f"HTTP blokkolás ({r.status_code})"
+            if r.status_code == 429:
+                time.sleep(5 * (i + 1))
+                continue
 
-        # HTML alapú bot/captcha detektálás
-        block_signals = [
-            "captcha",
-            "robot",
-            "access denied",
-            "unusual traffic",
-            "verify you are human",
-            "too many requests"
-        ]
+            if r.status_code != 200:
+                return None, f"HTTP hiba ({r.status_code})"
 
-        if any(sig in text_lower for sig in block_signals):
-            return r.status_code, None, "Bot védelem / CAPTCHA oldal"
+            # Bot / captcha detection
+            block_signals = [
+                "captcha",
+                "verify you are human",
+                "robot",
+                "access denied",
+                "unusual traffic",
+                "too many requests"
+            ]
 
-        if r.status_code != 200:
-            return r.status_code, None, f"HTTP hiba ({r.status_code})"
+            if any(sig in text for sig in block_signals):
+                return None, "Bot védelem / CAPTCHA"
 
-        return r.status_code, r.text, None
+            return r.text, None
 
-    except Exception as e:
-        return None, None, f"Hálózati hiba: {str(e)}"
+        except Exception as e:
+            return None, f"Hálózati hiba: {str(e)}"
+
+    return None, "Tartós 403 blokk"
 
 
 # --------------------------------------------------
@@ -69,16 +78,18 @@ def safe_get(url):
 
 def search_product_url(sku):
 
-    search_url = f"https://www.arukereso.hu/CategorySearch.php?st={sku}"
+    search_url = (
+        "https://www.arukereso.hu/CategorySearch.php?st="
+        + quote(sku)
+    )
 
-    status, html, blocked = safe_get(search_url)
+    html, err = safe_get(search_url)
 
-    if blocked or not html:
-        return None, blocked
+    if err:
+        return None, err
 
     soup = BeautifulSoup(html, "html.parser")
-
-    sku_lower = str(sku).lower()
+    sku_lower = sku.lower()
 
     for a in soup.find_all("a", href=True):
 
@@ -101,18 +112,16 @@ def search_product_url(sku):
 
 def get_prices(product_url):
 
-    results = []
+    html, err = safe_get(product_url)
 
-    status, html, blocked = safe_get(product_url)
-
-    if blocked or not html:
-        return results, blocked
+    if err:
+        return [], err
 
     soup = BeautifulSoup(html, "html.parser")
 
-    offers = soup.select("div.optoffer")
+    results = []
 
-    for offer in offers:
+    for offer in soup.select("div.optoffer"):
 
         try:
             shop_el = offer.select_one('[itemprop="seller"] [itemprop="name"]')
@@ -151,14 +160,8 @@ def dataframe_to_excel(df):
 # STREAMLIT UI
 # --------------------------------------------------
 
-st.set_page_config(
-    page_title="Árukereső SKU árlekérő",
-    layout="wide"
-)
-
+st.set_page_config(page_title="Árukereső SKU árlekérő", layout="wide")
 st.title("Árukereső SKU árlekérő")
-
-st.write("Tölts fel egy Excel vagy CSV fájlt. Kötelező oszlop: sku")
 
 uploaded_file = st.file_uploader(
     "Excel vagy CSV",
@@ -169,16 +172,12 @@ if uploaded_file:
 
     try:
 
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
+        df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
 
-        st.subheader("Beolvasott adatok")
         st.dataframe(df.head())
 
         if "sku" not in df.columns:
-            st.error("Nem található sku oszlop!")
+            st.error("Nincs sku oszlop!")
             st.stop()
 
         if st.button("Lekérdezés indítása"):
@@ -191,10 +190,10 @@ if uploaded_file:
 
                 sku = str(row["sku"]).strip()
 
-                product_url, block_reason = search_product_url(sku)
+                product_url, err = search_product_url(sku)
 
-                if block_reason:
-                    st.warning(f"⚠️ Védelem detektálva SKU: {sku} -> {block_reason}")
+                if err:
+                    st.warning(f"{sku} → {err}")
 
                 if not product_url:
                     all_rows.append({
@@ -202,16 +201,16 @@ if uploaded_file:
                         "product_url": None,
                         "shop": None,
                         "price": None,
-                        "blocked": block_reason
+                        "error": err
                     })
 
                     progress.progress((idx + 1) / total)
                     continue
 
-                offers, block_reason = get_prices(product_url)
+                offers, err = get_prices(product_url)
 
-                if block_reason:
-                    st.warning(f"⚠️ Védelem a termékoldalon: {sku} -> {block_reason}")
+                if err:
+                    st.warning(f"{sku} → {err}")
 
                 if not offers:
                     all_rows.append({
@@ -219,31 +218,30 @@ if uploaded_file:
                         "product_url": product_url,
                         "shop": None,
                         "price": None,
-                        "blocked": block_reason
+                        "error": err
                     })
                 else:
-                    for offer in offers:
+                    for o in offers:
                         all_rows.append({
                             "sku": sku,
                             "product_url": product_url,
-                            "shop": offer["shop"],
-                            "price": offer["price"],
-                            "blocked": None
+                            "shop": o["shop"],
+                            "price": o["price"],
+                            "error": None
                         })
 
-                time.sleep(1)
+                time.sleep(random.uniform(2.0, 5.0))
                 progress.progress((idx + 1) / total)
 
             result_df = pd.DataFrame(all_rows)
 
             st.success(f"Kész! {len(result_df)} sor.")
-
             st.dataframe(result_df)
 
             excel_file = dataframe_to_excel(result_df)
 
             st.download_button(
-                label="Excel letöltése",
+                "Excel letöltése",
                 data=excel_file,
                 file_name="arukereso_arak.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
