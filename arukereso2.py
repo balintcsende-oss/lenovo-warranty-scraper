@@ -1,3 +1,6 @@
+import os
+os.system("playwright install --with-deps chromium")
+
 import io
 import time
 import random
