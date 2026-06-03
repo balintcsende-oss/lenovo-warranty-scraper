@@ -9,3 +9,4 @@ playwright
 curl_cffi
 demjson3
 cloudscraper
+xlsxwriter
