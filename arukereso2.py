@@ -2,93 +2,38 @@ import io
 import time
 import random
 import pandas as pd
-import requests
 import streamlit as st
 
 from bs4 import BeautifulSoup
-from urllib.parse import quote
+from playwright.sync_api import sync_playwright
 
 # --------------------------------------------------
-# SESSION + HEADERS
+# PLAYWRIGHT HTML FETCH
 # --------------------------------------------------
 
-session = requests.Session()
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0 Safari/537.36"
-    ),
-    "Accept-Language": "hu-HU,hu;q=0.9,en;q=0.8",
-    "Referer": "https://www.arukereso.hu/"
-}
-
-session.headers.update(HEADERS)
-
-
-# --------------------------------------------------
-# SAFE GET (403 + CAPTCHA DETECTION + RETRY)
-# --------------------------------------------------
-
-def safe_get(url, retries=3):
-
-    for i in range(retries):
-
-        try:
-            r = session.get(url, timeout=30)
-            text = r.text.lower()
-
-            # HTTP block
-            if r.status_code == 403:
-                time.sleep(2 * (i + 1))
-                continue
-
-            if r.status_code == 429:
-                time.sleep(5 * (i + 1))
-                continue
-
-            if r.status_code != 200:
-                return None, f"HTTP hiba ({r.status_code})"
-
-            # Bot / captcha detection
-            block_signals = [
-                "captcha",
-                "verify you are human",
-                "robot",
-                "access denied",
-                "unusual traffic",
-                "too many requests"
-            ]
-
-            if any(sig in text for sig in block_signals):
-                return None, "Bot védelem / CAPTCHA"
-
-            return r.text, None
-
-        except Exception as e:
-            return None, f"Hálózati hiba: {str(e)}"
-
-    return None, "Tartós 403 blokk"
+def get_html(page, url):
+    try:
+        page.goto(url, timeout=60000, wait_until="domcontentloaded")
+        time.sleep(random.uniform(1.5, 3.0))
+        return page.content(), None
+    except Exception as e:
+        return None, str(e)
 
 
 # --------------------------------------------------
 # SKU -> PRODUCT URL
 # --------------------------------------------------
 
-def search_product_url(sku):
+def search_product_url(page, sku):
 
-    search_url = (
-        "https://www.arukereso.hu/CategorySearch.php?st="
-        + quote(sku)
-    )
+    search_url = f"https://www.arukereso.hu/CategorySearch.php?st={sku}"
 
-    html, err = safe_get(search_url)
-
+    html, err = get_html(page, search_url)
     if err:
         return None, err
 
     soup = BeautifulSoup(html, "html.parser")
+
     sku_lower = sku.lower()
 
     for a in soup.find_all("a", href=True):
@@ -110,10 +55,9 @@ def search_product_url(sku):
 # PRODUCT PAGE -> OFFERS
 # --------------------------------------------------
 
-def get_prices(product_url):
+def get_prices(page, product_url):
 
-    html, err = safe_get(product_url)
-
+    html, err = get_html(page, product_url)
     if err:
         return [], err
 
@@ -121,8 +65,9 @@ def get_prices(product_url):
 
     results = []
 
-    for offer in soup.select("div.optoffer"):
+    offers = soup.select("div.optoffer")
 
+    for offer in offers:
         try:
             shop_el = offer.select_one('[itemprop="seller"] [itemprop="name"]')
             price_el = offer.select_one('[itemprop="price"]')
@@ -146,11 +91,10 @@ def get_prices(product_url):
 # --------------------------------------------------
 
 def dataframe_to_excel(df):
-
     output = io.BytesIO()
 
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df.to_excel(writer, sheet_name="Arukereso", index=False)
+        df.to_excel(writer, index=False, sheet_name="Arukereso")
 
     output.seek(0)
     return output
@@ -160,37 +104,38 @@ def dataframe_to_excel(df):
 # STREAMLIT UI
 # --------------------------------------------------
 
-st.set_page_config(page_title="Árukereső SKU árlekérő", layout="wide")
-st.title("Árukereső SKU árlekérő")
+st.set_page_config(page_title="Árukereső SKU árlekérő (Playwright)", layout="wide")
 
-uploaded_file = st.file_uploader(
-    "Excel vagy CSV",
-    type=["xlsx", "xls", "csv"]
-)
+st.title("Árukereső SKU árlekérő (Playwright verzió)")
+
+uploaded_file = st.file_uploader("Excel vagy CSV", type=["xlsx", "xls", "csv"])
 
 if uploaded_file:
 
-    try:
+    df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
 
-        df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
+    st.dataframe(df.head())
 
-        st.dataframe(df.head())
+    if "sku" not in df.columns:
+        st.error("Nincs sku oszlop!")
+        st.stop()
 
-        if "sku" not in df.columns:
-            st.error("Nincs sku oszlop!")
-            st.stop()
+    if st.button("Lekérdezés indítása"):
 
-        if st.button("Lekérdezés indítása"):
+        all_rows = []
+        progress = st.progress(0)
+        total = len(df)
 
-            all_rows = []
-            progress = st.progress(0)
-            total = len(df)
+        with sync_playwright() as p:
+
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
 
             for idx, row in df.iterrows():
 
                 sku = str(row["sku"]).strip()
 
-                product_url, err = search_product_url(sku)
+                product_url, err = search_product_url(page, sku)
 
                 if err:
                     st.warning(f"{sku} → {err}")
@@ -207,7 +152,7 @@ if uploaded_file:
                     progress.progress((idx + 1) / total)
                     continue
 
-                offers, err = get_prices(product_url)
+                offers, err = get_prices(page, product_url)
 
                 if err:
                     st.warning(f"{sku} → {err}")
@@ -230,22 +175,21 @@ if uploaded_file:
                             "error": None
                         })
 
-                time.sleep(random.uniform(2.0, 5.0))
+                time.sleep(random.uniform(2, 5))
                 progress.progress((idx + 1) / total)
 
-            result_df = pd.DataFrame(all_rows)
+            browser.close()
 
-            st.success(f"Kész! {len(result_df)} sor.")
-            st.dataframe(result_df)
+        result_df = pd.DataFrame(all_rows)
 
-            excel_file = dataframe_to_excel(result_df)
+        st.success(f"Kész! {len(result_df)} sor.")
+        st.dataframe(result_df)
 
-            st.download_button(
-                "Excel letöltése",
-                data=excel_file,
-                file_name="arukereso_arak.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        excel_file = dataframe_to_excel(result_df)
 
-    except Exception as e:
-        st.exception(e)
+        st.download_button(
+            "Excel letöltése",
+            data=excel_file,
+            file_name="arukereso_playwright.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
